@@ -89,7 +89,60 @@ serial port.
 
 ## Response formats
 
-TBD
+Observed responses from the serial sensor include the values below. These
+are treated as state updates and can be mapped to entities in the
+integration.
+
+### Channel updates
+
+- CH1
+- CH-1
+- CH2
+- CH-2
+- CH3
+- CH-3
+- CH4
+- CH-4
+
+### Buzzer state
+
+- BZON
+- Buzzer : ON
+- BZOFF
+- Buzzer : OFF
+
+### Mouse channel switching
+
+- Mouse change channel : ON
+- Mouse change channel : OFF
+
+### Audio/HUB mode
+
+- AUDIO : Sync
+- HUB1 : Sync
+- HUB2 : Sync
+
+### Hotkey mode
+
+- Hot KEY : CTRL
+- CTRL
+- Hot KEY : SHIFT
+- SHIFT
+- Hot KEY : SCROLL
+- SCROLL
+- Hot KEY : CAPS
+- CAPS
+
+### Firmware strings (ignored today)
+
+- K50_0 FW Ver B1.42
+- K50_1 FW Ver B1.42
+- K50_2 FW Ver B1.42
+- K50_3 FW Ver B1.42
+- K50_4 FW Ver B1.42
+- K50_5 FW Ver B1.42
+- K50_6 FW Ver B1.42
+- K50_7 FW Ver B1.42
 
 ## Example exchanges
 
