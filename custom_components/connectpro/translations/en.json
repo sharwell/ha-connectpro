@@ -1,0 +1,16 @@
+{
+  "title": "ConnectPro KVM",
+  "config": {
+    "step": {
+      "user": {
+        "title": "ConnectPro KVM",
+        "description": "Set up the serial connection for your ConnectPro KVM.",
+        "data": {
+          "device": "Serial device path",
+          "baudrate": "Baud rate",
+          "name": "Name"
+        }
+      }
+    }
+  }
+}
