@@ -22,3 +22,7 @@ and iterative development.
 - The serial protocol reference will live in docs/commands.md.
 - Update `custom_components/connectpro/manifest.json` with your final
   documentation URL when the repo is published.
+
+### Local Codex initialization prompt
+
+> Read AGENTS.md and README.md to familiarize yourself with this repository. After performing any work which resulted in uncommitted changes to repository files, provide a commit message for the work. Commit messages should be provided in fenced code blocks for easy copy/paste.
