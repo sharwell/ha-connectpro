@@ -8,6 +8,9 @@
         "data": {
           "device": "Serial device path",
           "baudrate": "Baud rate",
+          "bytesize": "Data bits",
+          "parity": "Parity",
+          "stopbits": "Stop bits",
           "name": "Name"
         }
       }

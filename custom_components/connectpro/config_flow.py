@@ -8,7 +8,21 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import CONF_BAUDRATE, CONF_DEVICE, DEFAULT_BAUDRATE, DOMAIN
+from .const import (
+    BYTESIZE_OPTIONS,
+    CONF_BAUDRATE,
+    CONF_BYTESIZE,
+    CONF_DEVICE,
+    CONF_PARITY,
+    CONF_STOPBITS,
+    DEFAULT_BAUDRATE,
+    DEFAULT_BYTESIZE,
+    DEFAULT_PARITY,
+    DEFAULT_STOPBITS,
+    DOMAIN,
+    PARITY_OPTIONS,
+    STOPBITS_OPTIONS,
+)
 
 
 class ConnectProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -27,6 +41,15 @@ class ConnectProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_DEVICE): str,
                 vol.Optional(CONF_BAUDRATE, default=DEFAULT_BAUDRATE): vol.Coerce(
                     int
+                ),
+                vol.Optional(CONF_BYTESIZE, default=DEFAULT_BYTESIZE): vol.In(
+                    BYTESIZE_OPTIONS
+                ),
+                vol.Optional(CONF_PARITY, default=DEFAULT_PARITY): vol.In(
+                    PARITY_OPTIONS
+                ),
+                vol.Optional(CONF_STOPBITS, default=DEFAULT_STOPBITS): vol.In(
+                    STOPBITS_OPTIONS
                 ),
                 vol.Optional(CONF_NAME): str,
             }
