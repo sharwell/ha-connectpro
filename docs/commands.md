@@ -12,13 +12,18 @@ far from the current Home Assistant setup:
 - An email transcript of the output reported after sending `K1P0`
 - A debug log from manually sending `K1P0` through this integration on
   2026-10-01, with the user's daisy-chain context
+- A later debug log and physical observations of `K1P1`, `K2P1`, and
+  channel-2 button presses in a two-KVM chain on 2026-10-01
+- The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
+  comparison evidence rather than a ConnectPro protocol specification
 
 These sources establish port configuration, outgoing command payloads,
 dashboard actions, and response-to-helper mappings. The email transcript
 associates one response report with `K1P0` without preserving raw bytes or
-timing. The subsequent debug log preserves sent and received bytes, read
-boundaries, and host log timestamps for another report. The meanings of
-every command are not yet established.
+timing. The subsequent debug logs preserve sent and received bytes, read
+boundaries, and host log timestamps. The targeted channel test also records
+which physical KVM changed channel. The meanings of every command are not
+yet established.
 
 The tables below preserve the original YAML setup as protocol evidence.
 The integration now implements the confirmed channel and Reset actions,
@@ -189,9 +194,11 @@ domain; for example, call `shell_command.serial_command_ch1` to write
 
 The request-channel script establishes `Ch1` through `Ch4` as channel
 selection commands. The dashboard labels `W0` as `Reset`, but the scope of
-that reset is not established. The remaining command meanings are still
-unconfirmed; names alone do not prove a mapping to buzzer, hotkey, mouse,
-audio, hub, or other features.
+that reset is not established. The later targeted channel test below
+establishes effects for uppercase `K1P1` and `K2P1` in one two-KVM chain;
+it does not verify every lowercase sender above. Other command meanings
+remain unconfirmed on this hardware; names alone do not prove a mapping
+to buzzer, hotkey, mouse, audio, hub, or other features.
 
 ### Report observed after `K1P0`
 
@@ -252,10 +259,11 @@ In the original sensor automation, the two component version lines and
 new integration keeps receiving subsequent lines after logging them.
 
 The report suggests that `K1P0` could help obtain a status snapshot. It
-does not establish that the command is a read-only query, whether it also
-changes a setting, or how it differs from `K1P1` through `K1P4`. The state
-before the command and any changes caused by it were not recorded. A
-status report could accompany a command that changes configuration.
+does not establish that the command is a read-only query or whether it also
+changes a setting. The state before the command and any changes caused
+by it were not recorded. A status report could accompany a command that
+changes configuration. The later test below separately establishes the
+channel-selection effect of `K1P1` in this installation.
 
 Preserve the distinction between uppercase `K1P0` in this observation and
 lowercase `k1p0` in the existing shell command definition. Case equivalence
@@ -321,12 +329,78 @@ alone do not establish a daisy-chain effect. This capture does not identify
 which linked device emitted each line, how many devices responded, or how
 `K1P0` and `K1P1` through `K1P4` address or affect linked devices. Component
 identifiers and the eight firmware lines do not prove a device count.
-The integration currently exposes one device per serial connection; a
-chain-aware entity model requires evidence of routing and addressing.
+The later targeted channel test below supplies additional addressing
+evidence. The integration still exposes one device per serial connection;
+separate entities for linked units require feedback that can identify
+each unit's state.
 
 This capture confirms another report following uppercase `K1P0`, but does
 not record state before the command or establish that it is read-only.
 Lowercase equivalence and automatic state discovery remain unconfirmed.
+
+### Targeted channel switching in a two-KVM chain
+
+On 2026-10-01 the user tested uppercase `K1P1` and `K2P1` through the
+integration's manual command action, with physical channel-2 button
+presses between and after them. The user observed these results separately
+from the serial log:
+
+| Step | Action | First KVM afterward | Second KVM afterward |
+| --- | --- | --- | --- |
+| 1 | Send `K1P1` | Channel 1 | Channel 2 |
+| 2 | Press physical channel-2 button | Channel 2 | Channel 2 |
+| 3 | Send `K2P1` | Channel 2 | Channel 1 |
+| 4 | Press physical channel-2 button | Channel 2 | Channel 2 |
+
+The [capture fixture](../tests/fixtures/targeted_channel_debug_capture.json)
+preserves the seven ordered TX/RX events, exact bytes, host log timestamps,
+and separate physical observations. The serial sequence was:
+
+| Host log timestamp | Direction | Bytes |
+| --- | --- | --- |
+| `10:58:57.573` | TX | `b'K1P1\r\n'` |
+| `10:58:57.596` | RX | `b'OK\r\n'` |
+| `10:59:36.800` | RX | `b'CH2\r\n'` |
+| `11:00:00.161` | TX | `b'K2P1\r\n'` |
+| `11:00:00.169` | RX | `b'K1P1\r\n'` |
+| `11:00:07.098` | RX | `b'CH2'` |
+| `11:00:07.102` | RX | `b'\r\n'` |
+
+This confirms selective switching for the two commands and two units
+tested: `K1P1` changes the first KVM to channel 1 without changing the
+second, and `K2P1` changes the second without changing the first. The
+physical channel-2 action changes both units to channel 2. That physical
+action supplies no integration TX event. The log does not identify which
+unit emitted each reply.
+
+The [2013 StarTech SV231DVIUDDM manual](https://images10.newegg.com/UploadFilesForNewegg/itemintelligence/STARTECH/SV231DVIUDDM_Manual1401397479455.pdf#page=7),
+printed page 4 / PDF page 7, describes `k1pY` as console channel selection
+and `kXpY` for levels above 1 with a reported token whose level is reduced
+by one. The observed `K2P1` to `K1P1` response matches that pattern. It is
+consistent with addressing or forwarding to the next KVM, but the host
+capture does not show traffic on the link between units and does not prove
+the forwarding mechanism. The response is not an exact echo of the sent
+command. The manual belongs to a different vendor and model.
+
+The same table labels `chX` as synchronized channel selection. This test
+does not send `Ch1`, so it does not confirm that serial `Ch1` switches both
+linked units or establish what synchronized switching includes. Additional
+ports, levels, chain lengths, and lowercase equivalence remain untested.
+`K1P0` status-report behavior should not be generalized to `K2P0` yet.
+
+The integration currently logs `OK` and received `K1P1` as unrecognized
+lines without changing state. Neither is an addressed channel-state
+report: `OK` contains no channel or unit, and received `K1P1` is not
+established as state feedback. The Channel entity retains the last
+recognized unaddressed `CHn` / `CH-n` value on the serial connection. It
+can therefore retain `Channel 2` while the physical units differ after a
+targeted manual command. It does not report the state of each linked unit
+or establish that the chain is synchronized.
+
+The replay regression verifies both manual writes, raw RX logging, and
+that these two non-state replies do not fabricate a channel update. The
+final split `CH2` produces one state report only when the terminator
+arrives, and the reader stays connected without sending extra commands.
 
 ## Dashboard and channel request behavior
 
@@ -476,8 +550,10 @@ These examples describe the supplied automation and script logic. The
 `K1P0` email report above provides one command-associated response
 sequence. The subsequent debug capture adds raw byte framing, read
 boundaries, and host log timing for another such report. Neither records
-before/after device state. The meaning of `K1P0`, acknowledgment rules,
-and response origins within a daisy chain remain unknown.
+before/after device state. The targeted channel capture separately adds
+physical before/after observations for `K1P1` and `K2P1`. The meaning of
+`K1P0`, general acknowledgment rules, and the origin of each reply within
+a daisy chain remain unknown.
 
 ## Current integration behavior
 
@@ -499,6 +575,11 @@ observed through sensors rather than exposed as controls. The
 single printable ASCII command line under `data`, and appends CRLF. This
 provides a way to use known commands while collecting evidence for
 additional features.
+
+The targeted channel commands can selectively switch linked units through
+the manual action, but their observed replies do not update the Channel
+entity. The current entities describe recognized feedback on one serial
+connection; they do not track each unit in a chain separately.
 
 Debug logging records the device path, `TX`/`RX` direction, and escaped
 bytes, including line endings. Unrecognized incoming messages are logged
@@ -523,15 +604,20 @@ To complete the reference, collect:
   `input_select.kvm_hub2`.
 - The actual effect of the `Reset` button (`W0`), including which state or
   settings it changes.
-- The documented purpose of `K1P0`, how `K1P1` through `K1P4` differ, and
-  whether uppercase and lowercase variants behave identically. A manual
-  or before/after state observations should establish whether these
-  commands change any configuration.
+- The purpose and possible side effects of `K1P0`. The `K1P1` and `K2P1`
+  channel-selection effects are now observed in this installation, but
+  other ports/levels, lowercase equivalence, and status queries for linked
+  units still need confirmation.
+- A serial `Ch1` comparison with linked units initially on different
+  channels, to establish its synchronized-switching scope separately from
+  physical button behavior. Per-unit state feedback and response origins
+  are also needed before adding separate entities for linked units.
 - Before/after state observations and repeated captures with the chain
   topology identified, or a comparison with an isolated device, to establish
   command effects and the origin of responses. The existing `K1P0` debug
   capture already preserves bytes, timing, and read boundaries for one
-  exchange.
+  exchange. The targeted channel capture adds physical observations for
+  two commands; it does not establish the effects of every listed sender.
 - Startup/status behavior and any audio/hub modes beyond `Sync`, plus the
   retail KVM models and firmware versions to identify the scope of the
   observed behavior.

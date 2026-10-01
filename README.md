@@ -6,11 +6,12 @@ configures the port when it connects, so a startup `stty` automation is no
 longer needed.
 
 This is an initial implementation based on the existing installation's
-commands and response mappings. A user-provided `K1P0` debug capture from
-physical hardware confirms a manual serial exchange with the integration.
-Channel and Reset actions, recovery, and other hardware configurations
-still need hardware verification. The [protocol reference](docs/commands.md)
-records the evidence and the features that still need confirmation.
+commands and response mappings. User-provided captures from physical
+hardware confirm manual status and targeted channel exchanges through the
+integration. The native `Ch1` through `Ch4` controls, Reset, recovery, and
+other hardware configurations still need hardware verification. The
+[protocol reference](docs/commands.md) records the evidence and the
+features that still need confirmation.
 
 ## HACS installation (custom repo)
 
@@ -83,12 +84,14 @@ exposed until the command meanings are confirmed. State remains unknown
 until the relevant feedback arrives; sending a command does not establish
 that it succeeded. An old email and a subsequent debug capture associate
 `K1P0` with a report containing all seven known state categories, but its
-purpose and possible setting changes remain unconfirmed. The capture
-includes the user's daisy-chain context; it does not establish how commands
-or responses are routed between linked devices. The integration therefore
-sends no automatic startup or status query. Entities become unavailable
-on a connection failure, and the integration retries the connection
-automatically.
+purpose and possible setting changes remain unconfirmed. Later observations
+confirm that `K1P1` switches only the first KVM to channel 1 and `K2P1`
+switches only the second in the user's two-device chain. These commands
+are available through the manual command action; the integration creates
+one device per serial connection, without separate channel entities for
+linked units. It sends no automatic startup or status query. Entities
+become unavailable on a connection failure, and the integration retries
+the connection automatically.
 
 Each channel selection sends the requested command, even when the last
 reported channel matches. This keeps rapid requests, such as switching to
@@ -127,6 +130,14 @@ The command must be one printable ASCII line. Preserve its case and omit line
 endings; the integration adds `\r\n`. This action sends bytes without
 claiming a device acknowledgment. The [command catalog](docs/commands.md#command-catalog)
 includes legacy senders whose meanings are still unconfirmed.
+
+The Channel entity retains the last recognized `CH1` / `CH-1` through
+`CH4` / `CH-4` report received on the connection. In the
+[targeted channel capture](docs/commands.md#targeted-channel-switching-in-a-two-kvm-chain),
+`K1P1` returned `OK` and `K2P1` returned `K1P1`, without a channel report.
+After these manual commands, the entity can retain an earlier value while
+the linked KVMs are on different channels. Neither reply identifies their
+individual channel states.
 
 ## Debugging serial communication
 

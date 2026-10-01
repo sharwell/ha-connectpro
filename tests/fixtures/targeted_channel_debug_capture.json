@@ -1,0 +1,79 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "context": "The user tested two connected KVMs. Physical actions and observed device channels are recorded separately from the serial log; the serial responses do not establish a device address for CH2.",
+  "events": [
+    {
+      "id": "send_k1p1",
+      "direction": "TX",
+      "time": "10:58:57.573",
+      "ascii": "K1P1\r\n"
+    },
+    {
+      "id": "receive_ok",
+      "direction": "RX",
+      "time": "10:58:57.596",
+      "ascii": "OK\r\n"
+    },
+    {
+      "id": "receive_first_button_ch2",
+      "direction": "RX",
+      "time": "10:59:36.800",
+      "ascii": "CH2\r\n"
+    },
+    {
+      "id": "send_k2p1",
+      "direction": "TX",
+      "time": "11:00:00.161",
+      "ascii": "K2P1\r\n"
+    },
+    {
+      "id": "receive_k1p1",
+      "direction": "RX",
+      "time": "11:00:00.169",
+      "ascii": "K1P1\r\n"
+    },
+    {
+      "id": "receive_second_button_ch2",
+      "direction": "RX",
+      "time": "11:00:07.098",
+      "ascii": "CH2"
+    },
+    {
+      "id": "receive_second_button_terminator",
+      "direction": "RX",
+      "time": "11:00:07.102",
+      "ascii": "\r\n"
+    }
+  ],
+  "user_sequence": [
+    {
+      "step": 1,
+      "action": "Send K1P1 through Home Assistant",
+      "associated_log_events": ["send_k1p1", "receive_ok"],
+      "observation": "The first KVM changed to channel 1; the second stayed on channel 2."
+    },
+    {
+      "step": 2,
+      "action": "Press the physical channel 2 button",
+      "associated_log_events": ["receive_first_button_ch2"],
+      "observation": "Both KVMs were on channel 2."
+    },
+    {
+      "step": 3,
+      "action": "Send K2P1 through Home Assistant",
+      "associated_log_events": ["send_k2p1", "receive_k1p1"],
+      "observation": "The second KVM changed to channel 1; the first stayed on channel 2."
+    },
+    {
+      "step": 4,
+      "action": "Press the physical channel 2 button",
+      "associated_log_events": [
+        "receive_second_button_ch2",
+        "receive_second_button_terminator"
+      ],
+      "observation": "Both KVMs were on channel 2."
+    }
+  ]
+}

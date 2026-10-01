@@ -277,6 +277,87 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 messages,
             )
 
+    async def test_targeted_channel_capture_does_not_infer_state_from_replies(
+        self,
+    ) -> None:
+        """Unknown replies cannot substitute for an observed CH2 state message."""
+        capture = json.loads(
+            (
+                Path(__file__).parent
+                / "fixtures"
+                / "targeted_channel_debug_capture.json"
+            ).read_text(encoding="utf-8")
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        self.assertEqual(
+            events,
+            [
+                ("TX", b"K1P1\r\n"),
+                ("RX", b"OK\r\n"),
+                ("RX", b"CH2\r\n"),
+                ("TX", b"K2P1\r\n"),
+                ("RX", b"K1P1\r\n"),
+                ("RX", b"CH2"),
+                ("RX", b"\r\n"),
+            ],
+        )
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_parse_counts = [0, 1, 2, 2, 3, 3, 4]
+        expected_writes = []
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            task = self.start_reader()
+            for index, (direction, payload) in enumerate(events):
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                    expected_writes.append(payload)
+                else:
+                    self.reader.feed_data(payload)
+                # Yield to the reader without replaying elapsed wall time.
+                await asyncio.sleep(0)
+                self.assertEqual(self.writer.writes, expected_writes)
+                self.assertEqual(parse.call_count, expected_parse_counts[index])
+                self.assertEqual(
+                    self.client.state, {} if index < 2 else {"channel": "Channel 2"}
+                )
+
+        self.assertEqual(
+            [call.args[0] for call in parse.call_args_list],
+            ["OK", "CH2", "K1P1", "CH2"],
+        )
+        self.assertEqual(observed, [{"channel": "Channel 2"}])
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, [b"K1P1\r\n", b"K2P1\r\n"])
+        self.opener.assert_awaited_once()
+
+        messages = [record.getMessage() for record in captured.records]
+        self.assertEqual(
+            [
+                message
+                for message in messages
+                if message.startswith(("TX /dev/test-kvm: ", "RX /dev/test-kvm: "))
+            ],
+            [
+                f"{direction} /dev/test-kvm: {payload!r}"
+                for direction, payload in events
+            ],
+        )
+        for line in ("OK", "K1P1"):
+            self.assertIn(f"RX /dev/test-kvm unrecognized line: {line!r}", messages)
+
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
         complete = asyncio.Event()
