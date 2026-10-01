@@ -645,6 +645,33 @@ def test_device_name_falls_back_when_entry_title_is_empty(
     assert ConnectProChannelSelect(entry).device_info["name"] == "ConnectPro KVM"
 
 
+@pytest.mark.parametrize("model", [None, "", False, "UDP2-14AP"])
+def test_device_info_includes_only_reported_model_metadata(
+    entry: SimpleNamespace, client: FakeClient, model: str | bool | None
+) -> None:
+    """Entities created after detection include the model without a default guess."""
+    if model is not None:
+        client.state["model"] = model
+    device_info = ConnectProChannelSelect(entry).device_info
+    if model == "UDP2-14AP":
+        assert device_info["model"] == "UDP2-14AP"
+    else:
+        assert "model" not in device_info
+
+
+def test_delayed_model_is_included_without_entity_subscription(
+    entry: SimpleNamespace, client: FakeClient
+) -> None:
+    """DeviceInfo follows reported metadata even before an entity is registered."""
+    entity = ConnectProChannelSelect(entry)
+    assert "model" not in entity.device_info
+    client.state["model"] = "UDP2-14AP"
+    assert entity.device_info["model"] == "UDP2-14AP"
+    client.state.clear()
+    assert "model" not in entity.device_info
+    assert client.listeners == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("entity_factory", "entity_id"),

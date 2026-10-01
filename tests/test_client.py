@@ -34,6 +34,7 @@ def simulated_initialization_report() -> tuple[list[bytes], dict[str, str | bool
         )
     )
     return [event["ascii"].encode("ascii") for event in capture["rx"]], {
+        "model": "UDP2-14AP",
         "channel": "Channel 2",
         "hotkey": "Ctrl",
         "buzzer": False,
@@ -147,10 +148,14 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.writer.drain_started.wait(), 1)
             self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
             self.assertEqual(self.client.state, {})
-            for chunk in chunks:
+            for index, chunk in enumerate(chunks):
                 self.reader.feed_data(chunk)
                 await asyncio.sleep(0)
                 self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
+                self.assertEqual(
+                    self.client.state.get("model"),
+                    None if index == 0 else "UDP2-14AP",
+                )
 
         self.assertEqual(self.client.state, expected)
         self.assertTrue(self.client.connected)
@@ -350,12 +355,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             for offset in range(0, len(payload), 17):
                 self.reader.feed_data(payload[offset : offset + 17])
                 # Let the reader process each fragment, including the final
-                # firmware lines after the seven state-bearing messages.
+                # firmware lines after the model and seven setting messages.
                 await asyncio.sleep(0)
 
         self.assertEqual(
             self.client.state,
             {
+                "model": "UDP2-14AP",
                 "channel": "Channel 1",
                 "hotkey": "Ctrl",
                 "buzzer": True,
@@ -372,8 +378,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
         logs = "\n".join(captured.output)
         self.assertIn(f"RX /dev/test-kvm: {payload[:17]!r}", logs)
-        for line in (*report[:2], "V1P0", "V1P1"):
+        for line in (report[1], "V1P0", "V1P1"):
             self.assertIn(f"unrecognized line: {line!r}", logs)
+        self.assertNotIn(f"unrecognized line: {report[0]!r}", logs)
         for index in range(8):
             self.assertIn(f"ignored line: 'K50_{index} FW Ver B1.42'", logs)
 
@@ -424,11 +431,15 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.writer.writes, [])
             await self.client.async_send_command("K1P0")
             self.assertEqual(self.writer.writes, [tx])
-            for chunk in chunks:
+            for index, chunk in enumerate(chunks):
                 self.reader.feed_data(chunk)
                 # Preserve the captured boundaries rather than coalescing
                 # queued data into a single StreamReader.read() result.
                 await asyncio.sleep(0)
+                self.assertEqual(
+                    self.client.state.get("model"),
+                    None if index == 0 else "UDP2-14AP",
+                )
 
         self.assertEqual(
             [call.args[0] for call in parse.call_args_list], expected_lines
@@ -436,6 +447,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.client.state,
             {
+                "model": "UDP2-14AP",
                 "channel": "Channel 2",
                 "hotkey": "Ctrl",
                 "buzzer": False,
@@ -460,13 +472,72 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             ],
             [f"RX /dev/test-kvm: {chunk!r}" for chunk in chunks],
         )
-        for line in (*expected_lines[:2], "V1P0", "V1P1"):
-            self.assertIn(f"RX /dev/test-kvm unrecognized line: {line!r}", messages)
+        self.assertEqual(
+            [message for message in messages if "unrecognized line" in message],
+            [
+                f"RX /dev/test-kvm unrecognized line: {line!r}"
+                for line in (expected_lines[1], "V1P0", "V1P1")
+            ],
+        )
         for index in range(8):
             self.assertIn(
                 f"RX /dev/test-kvm ignored line: 'K50_{index} FW Ver B1.42'",
                 messages,
             )
+
+    async def test_model_requires_complete_confirmed_identifier_report(self) -> None:
+        """Simulated unknown boards and empty versions cannot identify the device."""
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        unknown_reports = (
+            b"UDP2_14AP_DP : Version_Number - 0009 - D1223\r\n"
+            b"UDP2_12AP_U3 : Version_Number - 0009 - D1223\r\n"
+            b"UDP2_14AP_U3 : Version_Number - \r\n\r\n"
+        )
+        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+            task = self.start_reader()
+            self.reader.feed_data(unknown_reports)
+            await asyncio.sleep(0)
+            self.assertEqual(self.client.state, {})
+            self.assertEqual(observed, [])
+            self.reader.feed_data(b"UDP2_14AP_U3 : Version_Number - 0010 - D0101")
+            await asyncio.sleep(0)
+            self.assertEqual(self.client.state, {})
+            self.assertEqual(observed, [])
+            self.reader.feed_data(b"\r\n")
+            await asyncio.sleep(0)
+            self.assertEqual(self.client.state, {"model": "UDP2-14AP"})
+            self.assertEqual(observed, [{"model": "UDP2-14AP"}])
+            # Later unknown reports cannot replace the confirmed identifier;
+            # a different version of the same board also leaves the model intact.
+            self.reader.feed_data(
+                unknown_reports + b"UDP2_14AP_U3 : Version_Number - 0009 - D1223\r\n"
+            )
+            await asyncio.sleep(0)
+
+        self.assertEqual(self.client.state, {"model": "UDP2-14AP"})
+        self.assertEqual(observed, [{"model": "UDP2-14AP"}])
+        self.assertEqual(self.writer.writes, [])
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.opener.assert_awaited_once()
+        self.assertEqual(
+            [
+                record.getMessage()
+                for record in captured.records
+                if "unrecognized line" in record.getMessage()
+            ],
+            [
+                f"RX /dev/test-kvm unrecognized line: {line!r}"
+                for line in (
+                    "UDP2_14AP_DP : Version_Number - 0009 - D1223",
+                    "UDP2_12AP_U3 : Version_Number - 0009 - D1223",
+                    "UDP2_14AP_U3 : Version_Number -",
+                )
+            ]
+            * 2,
+        )
 
     async def test_targeted_channel_capture_does_not_infer_state_from_replies(
         self,
@@ -645,6 +716,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             *[f"K50_{index} FW Ver B1.42" for index in range(8)],
         ]
         report_state = {
+            "model": "UDP2-14AP",
             "channel": "Channel 1",
             "hotkey": "Ctrl",
             "buzzer": False,
@@ -678,9 +750,11 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 # original timestamps or inferring state from user actions.
                 await asyncio.sleep(0)
                 self.assertEqual(self.writer.writes, expected_writes)
-                if index <= 2:
+                if index <= 4:
                     self.assertEqual(self.client.state, {})
                     self.assertEqual(observed, [])
+                elif index <= 6:
+                    self.assertEqual(self.client.state, {"model": "UDP2-14AP"})
                 elif index == len(events) - 2:
                     self.assertEqual(self.client.state, report_state)
                 elif index == len(events) - 1:
@@ -690,8 +764,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             [call.args[0] for call in parse.call_args_list],
             ["OK", *report_lines, "CH2"],
         )
-        self.assertEqual(len(observed), 8)
-        self.assertEqual(observed[0], {"channel": "Channel 1"})
+        self.assertEqual(len(observed), 9)
+        self.assertEqual(observed[0], {"model": "UDP2-14AP"})
+        self.assertEqual(observed[1], {"model": "UDP2-14AP", "channel": "Channel 1"})
         self.assertEqual(observed[-2:], [report_state, final_state])
         self.assertTrue(self.client.connected)
         self.assertFalse(task.done())
@@ -710,8 +785,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 for direction, payload in events
             ],
         )
-        for line in ("OK", *report_lines[:2], "V1P0", "V1P1"):
-            self.assertIn(f"RX /dev/test-kvm unrecognized line: {line!r}", messages)
+        self.assertEqual(
+            [message for message in messages if "unrecognized line" in message],
+            [
+                f"RX /dev/test-kvm unrecognized line: {line!r}"
+                for line in ("OK", report_lines[1], "V1P0", "V1P1")
+            ],
+        )
         for index in range(8):
             self.assertIn(
                 f"RX /dev/test-kvm ignored line: 'K50_{index} FW Ver B1.42'",

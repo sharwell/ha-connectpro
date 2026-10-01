@@ -1,7 +1,7 @@
 """Integration lifecycle and device-targeted actions on real HA objects."""
 
 from types import MappingProxyType, SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 import voluptuous as vol
@@ -51,7 +51,22 @@ def make_entry(domain="connectpro", state=ConfigEntryState.NOT_LOADED):
 
 
 def make_client():
+    listeners = set()
+
+    def add_listener(callback):
+        listeners.add(callback)
+        return lambda: listeners.discard(callback)
+
+    def notify():
+        for callback in tuple(listeners):
+            callback()
+
     return SimpleNamespace(
+        state={},
+        connected=True,
+        listeners=listeners,
+        add_listener=Mock(side_effect=add_listener),
+        notify=notify,
         async_connect=AsyncMock(),
         async_close=AsyncMock(),
         async_run=AsyncMock(),
@@ -93,6 +108,7 @@ async def test_setup_opens_one_shared_connection_and_closes_on_stop(hass):
 
     async def forward_platforms(entry, platforms):
         client.async_run.assert_not_called()
+        client.add_listener.assert_not_called()
 
     with (
         patch(
@@ -124,6 +140,7 @@ async def test_setup_failure_releases_connection_and_requests_ha_retry(hass):
             await async_setup_entry(hass, make_entry())
     client.async_close.assert_awaited_once()
     client.async_run.assert_not_called()
+    client.add_listener.assert_not_called()
 
 
 async def test_platform_setup_failure_closes_serial_port(hass):
@@ -140,6 +157,96 @@ async def test_platform_setup_failure_closes_serial_port(hass):
         await async_setup_entry(hass, make_entry())
     client.async_close.assert_awaited_once()
     client.async_run.assert_not_called()
+    client.add_listener.assert_not_called()
+
+
+async def test_device_model_updates_without_enabled_entities_and_survives_disconnect(
+    hass,
+):
+    """An entry listener persists metadata independently of entity subscriptions."""
+    entry, client = make_entry(), make_client()
+    device = register_device(hass, entry)
+    registry = dr.async_get(hass)
+    registry.async_update_device(
+        device.id, manufacturer="ConnectPro", name_by_user="My desk KVM"
+    )
+    assert device.model is None
+
+    async def run_reader(*, initialize_state):
+        assert initialize_state
+        assert len(client.listeners) == 1
+
+    client.async_run.side_effect = run_reader
+    with (
+        patch("custom_components.connectpro.ConnectProClient", return_value=client),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new=AsyncMock()
+        ),
+        patch.object(
+            registry, "async_update_device", wraps=registry.async_update_device
+        ) as update_device,
+    ):
+        assert await async_setup_entry(hass, entry)
+        await hass.async_block_till_done()
+        client.add_listener.assert_called_once()
+        assert len(client.listeners) == 1
+        for incomplete_state in ({}, {"model": ""}, {"model": False}):
+            client.state.clear()
+            client.state.update(incomplete_state)
+            client.notify()
+        update_device.assert_not_called()
+
+        client.state["model"] = "UDP2-14AP"
+        client.notify()
+        update_device.assert_called_once_with(device.id, model="UDP2-14AP")
+        updated = registry.async_get(device.id)
+        assert updated.model == "UDP2-14AP"
+        assert updated.identifiers == {("connectpro", entry.entry_id)}
+        assert updated.manufacturer == "ConnectPro"
+        assert updated.name == entry.title
+        assert updated.name_by_user == "My desk KVM"
+
+        client.notify()
+        client.connected = False
+        client.state.clear()
+        client.notify()
+        assert registry.async_get(device.id).model == "UDP2-14AP"
+        update_device.assert_called_once_with(device.id, model="UDP2-14AP")
+
+        with patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            new=AsyncMock(return_value=True),
+        ):
+            assert await async_unload_entry(hass, entry)
+        # Home Assistant runs entry callbacks after successful integration unload.
+        await entry._async_process_on_unload(hass)
+        assert client.listeners == set()
+        client.state["model"] = "UDP2-14AP"
+        client.notify()
+        update_device.assert_called_once_with(device.id, model="UDP2-14AP")
+
+
+async def test_device_model_callback_tolerates_an_unregistered_device(hass):
+    """A model report never creates a second device when registration is absent."""
+    entry, client = make_entry(), make_client()
+    with (
+        patch("custom_components.connectpro.ConnectProClient", return_value=client),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new=AsyncMock()
+        ),
+    ):
+        assert await async_setup_entry(hass, entry)
+    client.state["model"] = "UDP2-14AP"
+    client.notify()
+    assert (
+        dr.async_get(hass).async_get_device(
+            identifiers={("connectpro", entry.entry_id)}
+        )
+        is None
+    )
+    await entry._async_process_on_unload(hass)
+    assert client.listeners == set()
 
 
 @pytest.mark.parametrize("unload_ok", [True, False])

@@ -72,6 +72,13 @@ their current state. Serial-port checks in the setup form do not send KVM
 commands. To change the port or name later, use **Reconfigure** on the
 integration entry; its existing entities are preserved.
 
+When a status report contains the confirmed `UDP2_14AP_U3` identifier,
+the integration sets **UDP2-14AP** as the model in Home Assistant's device
+information. It updates the existing device after the reply arrives and
+retains the identified model through disconnects. Other model identifiers
+remain unmapped; component version strings are not used as device firmware
+versions. See [model identification](docs/commands.md#model-identification).
+
 ## Entities and actions
 
 | Entity | Behavior |
@@ -312,8 +319,9 @@ and receives, not an independent electrical capture.
 
 The [captured `K1P0` exchange](docs/commands.md#debug-capture-after-k1p0)
 illustrates fragmented reads and trailing whitespace. The component version
-lines and `V1P0` / `V1P1` are logged as unrecognized because their meanings
-are not yet mapped to entities; this does not stop processing state feedback.
+line beginning `UDP2_14AP_U3` now identifies the device model. The DP
+component version line and `V1P0` / `V1P1` remain unrecognized diagnostics;
+this does not stop processing state feedback.
 
 For useful protocol evidence, capture a connection/startup followed by one
 action at a time, and note the KVM model, firmware version, and observed

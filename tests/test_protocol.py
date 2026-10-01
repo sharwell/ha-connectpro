@@ -46,6 +46,41 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(response=response):
                 self.assertEqual(protocol.parse_response(response), expected)
 
+    def test_confirmed_usb_board_identifier_sets_model_independent_of_version(
+        self,
+    ) -> None:
+        """The identifier names the retail model, without exposing firmware state."""
+        for suffix in ("0009 - D1223", "0010 - D0101", "2.0"):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(
+                    protocol.parse_response(
+                        f"UDP2_14AP_U3 : Version_Number - {suffix}"
+                    ),
+                    {"model": "UDP2-14AP"},
+                )
+
+    def test_incomplete_and_other_model_identifiers_remain_unknown(self) -> None:
+        """Do not infer model from DP boards, substrings, or malformed reports."""
+        for line in (
+            "UDP2_14AP_DP : Version_Number - 0009 - D1223",
+            "UDP2_12AP_U3 : Version_Number - 0009 - D1223",
+            "UDP2_14AP_U30 : Version_Number - 0009 - D1223",
+            "UDP2_14AP_U3_extra : Version_Number - 0009 - D1223",
+            "OTHER_UDP2_14AP_U3 : Version_Number - 0009 - D1223",
+            "udp2_14ap_u3 : Version_Number - 0009 - D1223",
+            "UDP2_14AP_U3 : version_number - 0009 - D1223",
+            "UDP2_14AP_U3: Version_Number - 0009 - D1223",
+            "UDP2_14AP_U3 : Version_Number -0009 - D1223",
+            "UDP2_14AP_U3",
+            "UDP2_14AP_U3 : Version_Number",
+            "UDP2_14AP_U3 : Version_Number -",
+            "UDP2_14AP_U3 : Version_Number - ",
+            "UDP2_14AP_U3 : Version_Number -   ",
+            "",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(protocol.parse_response(line), {})
+
     def test_scan_feedback_keeps_enabled_and_interval_fields_separate(self) -> None:
         """Timing feedback does not enable scanning or alter the selected channel."""
         responses = {

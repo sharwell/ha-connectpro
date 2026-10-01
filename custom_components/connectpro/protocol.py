@@ -40,10 +40,16 @@ for _key, _option in (
         _RESPONSES[_message] = ("hotkey", _option)
 
 IGNORED_RESPONSES = frozenset(f"K50_{index} FW Ver B1.42" for index in range(8))
+_MODEL_REPORT_PREFIX = "UDP2_14AP_U3 : Version_Number - "
 
 
 def parse_response(line: str) -> dict[str, str | bool]:
-    """Return a confirmed state change for an exact known response."""
+    """Return observed state or a model confirmed by its exact board identifier."""
+    if (
+        line.startswith(_MODEL_REPORT_PREFIX)
+        and line[len(_MODEL_REPORT_PREFIX) :].strip()
+    ):
+        return {"model": "UDP2-14AP"}
     if (response := _RESPONSES.get(line)) is None:
         return {}
     key, value = response

@@ -39,6 +39,9 @@ far from the current Home Assistant setup:
   five scan interval replies and 5-second channel cycling; the user
   subsequently verified audio fixed/following behavior and the effect of
   both audio routing and auto-scan on both linked KVMs
+- The user's confirmation that the `UDP2_14AP_U3` identifier in a `k1p0`
+  report identifies the retail model `UDP2-14AP`; response indicators for
+  other models have not been supplied
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -264,8 +267,8 @@ K50_6 FW Ver B1.42
 K50_7 FW Ver B1.42
 ```
 
-This report includes feedback for all seven state categories handled by
-the integration:
+This report includes feedback for the seven original entity-state
+categories handled by the integration:
 
 | Reported state | Value exposed by the integration |
 | --- | --- |
@@ -278,16 +281,17 @@ the integration:
 | `Mouse change channel : OFF` | Mouse channel switching: off |
 
 The two `UDP2_14AP_*` lines contain component identifiers and version
-strings. They are preserved as evidence without assuming that either
-identifier is the product's retail model number. The standalone `V1P0`
+strings. The user subsequently confirmed that `UDP2_14AP_U3` identifies
+retail model `UDP2-14AP`; the integration now uses that specific mapping
+for device metadata, as detailed below. The standalone `V1P0`
 and `V1P1` lines match tokens in the outgoing command catalog, but their
 meaning in this report is unknown; they are not established as echoes or
 routing-state updates. The eight `K50_*` lines match firmware messages
 already accepted by the original automation without a helper update.
 
-The integration parses the seven known state lines and logs every raw
-received byte at debug level. The component version lines and `V1P0` /
-`V1P1` are currently logged as unrecognized; they do not interrupt the
+The integration parses the seven entity-state lines and the confirmed
+model identifier, and logs every raw received byte at debug level. The DP
+component version line and `V1P0` / `V1P1` remain unrecognized; they do not interrupt the
 reader or clear previously observed state. The email text is also stored
 in [the regression fixture](../tests/fixtures/k1p0_report.txt).
 
@@ -306,6 +310,42 @@ Preserve uppercase `K1P0` in this historical observation and lowercase
 supports using the lowercase command for
 [automatic state initialization](#automatic-state-initialization); no new
 raw lowercase status exchange was supplied with that confirmation.
+
+### Model identification
+
+The user confirmed that `UDP2_14AP_U3` in a `k1p0` report identifies this
+device's retail model as `UDP2-14AP`. This confirmation adds meaning to
+the previously captured bytes; no new hardware exchange was supplied.
+The only known model mapping is:
+
+| Report identifier | Home Assistant device model |
+| --- | --- |
+| `UDP2_14AP_U3` | `UDP2-14AP` |
+
+The parser recognizes a complete line beginning exactly
+`UDP2_14AP_U3 : Version_Number - ` with a nonempty version suffix. Model
+identification is tied to the exact component identifier rather than the
+captured `0009 - D1223` version, so a different version suffix can still
+identify the same model. Partial lines, empty suffixes, other identifiers,
+lookalike prefixes, and case variants do not identify a device. There is
+no general underscore-to-hyphen transformation, and the DP-only identifier
+does not establish a model.
+
+Home Assistant exposes model information on the integration's device
+page. Once the response arrives, the integration updates the existing
+device registry record using its current identifier. The entity/device
+names and unique IDs remain unchanged, and no extra metadata sensor is
+created. Registry updates run from the shared connection's subscription,
+so model identification does not depend on an individual entity being
+enabled. Duplicate reports do not rewrite an unchanged model. The
+subscription is removed when the integration unloads.
+
+The model is descriptive metadata: the device registry retains its last
+identified model while a disconnected client clears live state and retries.
+A device with no recognized model has no model supplied by this mapping.
+The firmware suffix and the separate DP/`K50_*` version lines are not
+mapped to a device firmware version. This report describes one serial
+connection; it does not identify the models of linked KVMs separately.
 
 ### Debug capture after `K1P0`
 
@@ -352,11 +392,14 @@ these bytes in its raw RX logs and strips outer whitespace for parsing.
 The seven observed state values are therefore `Channel 2`, `Ctrl`, buzzer
 off, mouse channel switching off, and `Sync` for both hubs and audio.
 
-The debug log labels the two component version lines and `V1P0` / `V1P1`
-as unrecognized, and all eight known firmware lines as ignored. These are
-expected classifications, not reader errors; subsequent feedback remains
-processable. The replay test verifies the seven state values, exact TX/RX
-bytes, normalized lines, and these log classifications.
+The original debug log labels the two component version lines and `V1P0`
+/ `V1P1` as unrecognized, and all eight known firmware lines as ignored.
+Following the user's model confirmation, the current parser recognizes
+the U3 line as model metadata; the DP line and the two video tokens remain
+unrecognized. These diagnostics do not prevent later state processing.
+The replay test verifies the seven entity-state values, the model, exact
+TX/RX bytes, normalized lines, and the current log classifications. The
+raw capture retains the original historical diagnostics.
 
 The user noted that daisy-chain linked devices, rather than one isolated
 device, might explain differences. The changed channel and buzzer values
@@ -469,8 +512,9 @@ state line. The user did not supply an additional physical before/after
 comparison of other settings for this sequence, so it does not establish
 that `K1P0` is read-only in every respect.
 
-The reader leaves state unchanged after `OK`, updates channel to
-`Channel 1` from `CH-1`, fills the other six recognized state categories,
+The reader leaves state unchanged after `OK`, identifies the model from
+the complete U3 line, updates channel to `Channel 1` from `CH-1`, fills
+the other six original entity-state categories,
 then updates only channel to `Channel 2` after the physical-button `CH2`.
 The replay regression verifies these transitions, the exact command writes
 and raw reads, existing unknown/ignored diagnostics, continued connection,
@@ -817,7 +861,8 @@ reconnect backoff and requests state on the replacement connection.
 
 The status response is consistent with the first/local KVM and does not
 create per-unit state for a chain. `K2P0` returned `ERROR` in the supplied
-capture and is not sent automatically. Component versions, video tokens,
+capture and is not sent automatically. The confirmed U3 identifier
+supplies device model metadata; other component versions, video tokens,
 and firmware diagnostics continue through the normal logging behavior.
 
 Lifecycle tests verify the initial request, received state, reconnect
@@ -1111,8 +1156,9 @@ To complete the reference, collect:
   above. Whether an independent hub Sync command exists remains open;
   `h1p0` is rejected in this installation.
 - Audio destinations beyond the tested Channel 1, video routing in status
-  reports, and the retail KVM models and firmware versions to identify
-  the scope of the observed behavior. Bare `V1P0` / `V1P1` report tokens do not yet provide
+  reports, and model indicators for other KVMs and firmware versions to
+  identify the scope of the observed behavior. `UDP2_14AP_U3` now identifies
+  `UDP2-14AP`. Bare `V1P0` / `V1P1` report tokens do not yet provide
   video state.
 - The effect of UART board selection on later commands and its scope
   across the chain. `u0` / `u1` / `u2` replies and `Ready-0` diagnostics

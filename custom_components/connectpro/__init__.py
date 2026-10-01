@@ -8,7 +8,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, EVENT_HOMEASSISTANT_STOP, Platform
-from homeassistant.core import Event, HomeAssistant, ServiceCall
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import (
     ConfigEntryNotReady,
     HomeAssistantError,
@@ -108,8 +108,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConnectProConfigEntry) -
 
     entry.runtime_data = client
     setup_complete = False
+    unsubscribe_metadata = None
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+        @callback
+        def async_update_device_metadata() -> None:
+            """Keep reported device metadata even when all entities are disabled."""
+            model = client.state.get("model")
+            if not isinstance(model, str) or not model:
+                return
+            registry = dr.async_get(hass)
+            device = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+            if device is not None and device.model != model:
+                registry.async_update_device(device.id, model=model)
+
+        unsubscribe_metadata = client.add_listener(async_update_device_metadata)
+        entry.async_on_unload(unsubscribe_metadata)
+        async_update_device_metadata()
         entry.async_create_background_task(
             hass, client.async_run(initialize_state=True), "ConnectPro reader"
         )
@@ -123,6 +139,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConnectProConfigEntry) -
         setup_complete = True
     finally:
         if not setup_complete:
+            if unsubscribe_metadata is not None:
+                unsubscribe_metadata()
             await client.async_close()
     _LOGGER.debug("ConnectPro entities ready for %s", entry.data[CONF_DEVICE])
     return True
