@@ -1,6 +1,9 @@
 """Constants for the ConnectPro KVM integration."""
 
 DOMAIN = "connectpro"
+DEFAULT_NAME = "ConnectPro KVM"
+SERVICE_SEND_COMMAND = "send_command"
+ATTR_COMMAND = "command"
 
 CONF_DEVICE = "device"
 CONF_BAUDRATE = "baudrate"

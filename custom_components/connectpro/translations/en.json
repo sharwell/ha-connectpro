@@ -4,14 +4,76 @@
     "step": {
       "user": {
         "title": "ConnectPro KVM",
-        "description": "Set up the serial connection for your ConnectPro KVM.",
+        "description": "Choose the KVM's serial port. The integration automatically configures it for 115200 baud, 8 data bits, no parity, and 1 stop bit. Disable any existing serial sensor or application using this port before continuing.",
         "data": {
-          "device": "Serial device path",
-          "baudrate": "Baud rate",
-          "bytesize": "Data bits",
-          "parity": "Parity",
-          "stopbits": "Stop bits",
-          "name": "Name"
+          "device": "Serial port",
+          "name": "Device name"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure ConnectPro KVM",
+        "description": "Change the serial port or device name. The integration configures the port automatically and keeps the existing entities.",
+        "data": {
+          "device": "Serial port",
+          "name": "Device name"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to open and configure this serial port. Check the device path and permissions, and stop other applications using the port.",
+      "invalid_device": "Enter or select a serial device path."
+    },
+    "abort": {
+      "already_configured": "This serial port is already configured.",
+      "reconfigure_successful": "The KVM configuration was updated."
+    }
+  },
+  "entity": {
+    "select": {
+      "channel": {
+        "name": "Channel"
+      }
+    },
+    "button": {
+      "reset": {
+        "name": "Reset"
+      }
+    },
+    "binary_sensor": {
+      "buzzer": {
+        "name": "Buzzer"
+      },
+      "mouse_change_channel": {
+        "name": "Mouse channel switching"
+      }
+    },
+    "sensor": {
+      "hotkey": {
+        "name": "Hotkey"
+      },
+      "audio": {
+        "name": "Audio routing"
+      },
+      "hub1": {
+        "name": "Hub 1 routing"
+      },
+      "hub2": {
+        "name": "Hub 2 routing"
+      }
+    }
+  },
+  "services": {
+    "send_command": {
+      "name": "Send command",
+      "description": "Send one printable ASCII command to the selected KVM. A CRLF terminator is added automatically. Use this for commands whose behavior you have confirmed for your device.",
+      "fields": {
+        "device_id": {
+          "name": "KVM",
+          "description": "The ConnectPro KVM device to send the command to."
+        },
+        "command": {
+          "name": "Command",
+          "description": "Command text, preserving case and without line endings. For example: Ch2."
         }
       }
     }

@@ -5,6 +5,7 @@ far from the current Home Assistant setup:
 
 - `Configure serial port when Home Assistant starts`
 - `Process serial sensor inputs`
+- The YAML definition of the stock serial sensor
 - `shell_command.yaml`
 - The script with alias `KVM - request channel`
 - Dashboard channel buttons and the button labeled `Reset`
@@ -12,6 +13,13 @@ far from the current Home Assistant setup:
 These sources establish port configuration, outgoing command payloads,
 dashboard actions, and response-to-helper mappings. They do not include
 raw command/response captures or establish the meanings of every command.
+
+The tables below preserve the original YAML setup as protocol evidence.
+The integration now implements the confirmed channel and Reset actions,
+receives the listed state feedback into native entities, and offers a
+generic command action. See the [README](../README.md) for installation,
+migration, and logging instructions. The old helpers and shell actions are
+not required by the integration.
 
 ## Serial settings
 
@@ -34,7 +42,35 @@ device path or a default to hard-code into the integration.
 
 The command does not explicitly set hardware/software flow control,
 raw/canonical mode, echo, or newline translation. Those effective terminal
-settings cannot be determined from this command alone.
+settings cannot be determined from this command alone; the serial sensor
+also opens and configures the port.
+
+### Supplied serial sensor configuration
+
+The existing setup uses the stock serial sensor with this configuration:
+
+```yaml
+- platform: serial
+  serial_port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0
+  baudrate: 115200
+  bytesize: 8
+  parity: N
+  stopbits: 1
+```
+
+There is no `value_template` and no explicit `xonxoff`, `rtscts`, or
+`dsrdtr` override. The current
+[Home Assistant serial sensor implementation](https://github.com/home-assistant/core/blob/dev/homeassistant/components/serial/sensor.py)
+defaults all three flow-control flags to false. It reads newline-delimited
+bytes, decodes them as UTF-8, and strips leading and trailing whitespace
+before exposing a sensor state. Thus the automation sees processed lines,
+not raw bytes or terminators. The installed Home Assistant version and
+raw captures would establish the exact historical behavior.
+
+The ConnectPro integration configures the same 115200/8N1 settings and
+disabled flow control when it opens the port; no separate serial sensor or
+startup configuration command is needed. Existing entries with explicit
+serial settings keep those values.
 
 ### Home Assistant startup
 
@@ -201,16 +237,20 @@ unknown; the label does not establish a factory reset.
 `trigger.to_state.state` into `value` and selects the matching branch. Its
 mode is `single`, and it retains 20 traces.
 
-The comparisons are exact, including case, spaces, and punctuation. The
-automation does not trim whitespace or normalize case. These are sensor
-state strings; the supplied automation does not establish the raw serial
-response terminator or any preprocessing performed by the sensor.
+The comparisons are exact, including case, internal spaces, and
+punctuation. The automation itself does not trim whitespace or normalize
+case. The stock serial sensor strips leading and trailing whitespace
+before publishing its state, as described above. The configured sensor
+has no additional value template. These are processed sensor state
+strings; raw captures are still needed to establish the exact response
+terminators emitted by the device.
 
 For select helpers, the automation calls `input_select.select_option` with
 the exact option shown below. For boolean helpers, it calls
 `input_boolean.turn_on` or `input_boolean.turn_off` as indicated. These
-helpers belong to the current hand-rolled setup; the integration scaffold
-does not yet expose corresponding entities.
+helpers belong to the original hand-rolled setup. The integration exposes
+a native channel select, sensors for hotkey/audio/hub modes, and binary
+sensors for the two on/off states instead of writing these helpers.
 
 ### Channel updates
 
@@ -255,7 +295,7 @@ options for any independent audio or hub channel selection are not shown.
 | `Hot KEY : SCROLL`, `SCROLL` | `input_select.kvm_hotkey` | `Scroll Lock` |
 | `Hot KEY : CAPS`, `CAPS` | `input_select.kvm_hotkey` | `Caps Lock` |
 
-### Firmware strings (ignored today)
+### Firmware strings (ignored by the original automation)
 
 - `K50_0 FW Ver B1.42`
 - `K50_1 FW Ver B1.42`
@@ -293,13 +333,37 @@ which responses follow a particular command, or whether messages are
 acknowledgments, unsolicited updates, or replies to a status query.
 Response timing, ordering, and startup state discovery are also unknown.
 
+## Current integration behavior
+
+The integration owns the port for both reading and writing. It applies the
+serial settings on connection, reconnects after connection failures, and
+parses the confirmed feedback into native entities. It does not assume
+that a successful write means the requested state has taken effect.
+Values remain unknown until feedback arrives after connection; no startup
+or status query has been invented.
+
+The channel select sends `Ch1` through `Ch4`, and the Reset button sends
+`W0`. Every valid channel selection sends a command, including a selection
+that matches the last observed channel. Unlike the old script's guard,
+this allows a quick change and change back before the first response
+arrives. Other command meanings remain unconfirmed, so those features are
+observed through sensors rather than exposed as controls. The
+`connectpro.send_command` action accepts a ConnectPro `device_id` and a
+single printable ASCII command line under `data`, and appends CRLF. This provides a
+way to use known commands while collecting evidence for additional
+features.
+
+Debug logging records the device path, `TX`/`RX` direction, and escaped
+bytes, including line endings. Unrecognized incoming messages are logged
+without changing known state. These logs can correlate a sent command
+with subsequent feedback, including messages that the original automation
+did not recognize. See the
+[debugging instructions](../README.md#debugging-serial-communication).
+
 ## Details needed from the existing setup
 
 To complete the reference, collect:
 
-- The configuration that creates `sensor.serial_sensor`, including any
-  decoding, line splitting, whitespace handling, and port settings applied
-  by the sensor itself.
 - Confirmation that the supplied request-channel script has entity ID
   `script.kvm_request_channel`.
 - Other scripts, automations, or dashboard controls that call the listed

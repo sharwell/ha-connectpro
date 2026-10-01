@@ -1,0 +1,12 @@
+send_command:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: connectpro
+    command:
+      required: true
+      example: Ch2
+      selector:
+        text:
