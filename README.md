@@ -7,8 +7,9 @@ longer needed.
 
 This is an initial implementation based on the existing installation's
 commands and response mappings. User-provided captures from physical
-hardware confirm manual status, targeted channel, buzzer, and `W0` exchanges
-through the integration. The user observed `W0` cycling all displays off
+hardware confirm manual status, targeted channel, hotkey, buzzer, mouse
+channel-switching, and `W0` exchanges through the integration. The user
+observed `W0` cycling all displays off
 and on. The native `Ch1` through `Ch4` controls, recovery, and other
 hardware configurations still need hardware verification. The
 [protocol reference](docs/commands.md) records the evidence and the
@@ -75,17 +76,17 @@ existing entities are preserved.
 | --- | --- |
 | Channel select | Sends `Ch1` through `Ch4`; reports `Channel 1` through `Channel 4` from received feedback. |
 | Reset displays button | Sends `W0`, matching the previous dashboard's Reset action. The user observed all displays cycling off and on; the captured reply is `Wake-Up : DP-ALL`. |
-| Hotkey sensor | Reports `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock` from recognized feedback. |
+| Hotkey select | Selects `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock` using `ctrl`, `shift`, `scroll`, or `caps`; reports recognized feedback. |
 | Audio, Hub 1, and Hub 2 sensors | Report the confirmed `Sync` feedback. Other modes need protocol evidence. |
 | Buzzer switch | Sends `BZON` or `BZOFF`; reports the received on/off state. |
-| Mouse change channel binary sensor | Reports the received on/off state. |
+| Mouse channel switching switch | Sends `M1` to enable or `M0` to disable mouse channel switching; reports the received on/off state. |
 
-The switch, channel select, and sensors describe observed state. Other
-settings remain read-only until their commands are confirmed. State
-remains unknown until the relevant feedback arrives; sending a command
-does not establish that it succeeded. The read-only Buzzer binary sensor
-remains available for existing installations, but is disabled by default
-for new installations because the switch also reports its state.
+The controls and routing sensors describe observed state. Audio and hub
+routing remain read-only until their commands are confirmed. State remains
+unknown until relevant feedback arrives; sending a command does not
+establish that it succeeded. Hotkey, buzzer, and mouse channel switching
+each have one control that also reports state. Their earlier read-only
+sensors are removed during this prerelease development.
 
 Repeated captures show `K1P0` producing a report
 containing all seven known state categories. After `K1P1`, this report
@@ -102,12 +103,14 @@ the connection automatically.
 Each channel selection sends the requested command, even when the last
 reported channel matches. This keeps rapid requests, such as switching to
 Channel 3 and back to Channel 2 before feedback arrives, from being lost.
-The buzzer switch also sends each on/off request, including requests that
-match the last reported state, and waits for feedback before changing state.
+The hotkey selector and switches also send every valid request, including
+requests matching the last reported state, and wait for feedback before
+changing state.
 
-Use the entities on the integration's device page to select a channel,
-control the buzzer, or press Reset displays. In an automation, replace the
-example entity IDs below with the ones created in your installation:
+Use the entities on the integration's device page to select a channel or
+hotkey, control the buzzer or mouse channel switching, or press Reset
+displays. In an automation, replace the example entity IDs below with the
+ones created in your installation:
 
 ```yaml
 action: select.select_option
@@ -127,6 +130,20 @@ target:
 action: switch.turn_off
 target:
   entity_id: switch.your_kvm_buzzer
+```
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.your_kvm_hotkey
+data:
+  option: Scroll Lock
+```
+
+```yaml
+action: switch.turn_on
+target:
+  entity_id: switch.your_kvm_mouse_channel_switching
 ```
 
 For a command already known to work with your device, use the
@@ -175,6 +192,15 @@ responses update its state; it does not assume that a write succeeded.
 The user heard the buzzer and reported that the commands appear to affect
 both linked KVMs. The integration reports the feedback received on the
 connection rather than separate buzzer states for each unit.
+
+The [hotkey and mouse capture](docs/commands.md#debug-capture-after-hotkey-and-mouse-commands)
+shows the four lowercase hotkey commands reporting their selected modes.
+Both lowercase and uppercase `m0` / `M0` report mouse channel switching
+off; `m1` / `M1` report it on. The controls use the tested lowercase
+hotkey commands and uppercase mouse commands. These settings are reported
+for one serial connection. The user verified the selected hotkeys and
+mouse channel switching in use and confirmed that the changes affect
+both linked KVMs in this installation.
 
 ## Debugging serial communication
 

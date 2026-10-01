@@ -1,4 +1,4 @@
-"""Observed hotkey and routing settings for ConnectPro KVM devices."""
+"""Observed routing settings for ConnectPro KVM devices."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from . import ConnectProConfigEntry
 
-SENSOR_KEYS = ("hotkey", "audio", "hub1", "hub2")
+SENSOR_KEYS = ("audio", "hub1", "hub2")
 
 
 async def async_setup_entry(
@@ -22,7 +22,7 @@ async def async_setup_entry(
     entry: ConnectProConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the observed KVM hotkey and routing settings."""
+    """Set up the observed KVM routing settings."""
     async_add_entities(ConnectProSensor(entry, key) for key in SENSOR_KEYS)
 
 

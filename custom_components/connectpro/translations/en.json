@@ -32,6 +32,9 @@
     "select": {
       "channel": {
         "name": "Channel"
+      },
+      "hotkey": {
+        "name": "Hotkey"
       }
     },
     "button": {
@@ -42,20 +45,12 @@
     "switch": {
       "buzzer": {
         "name": "Buzzer"
-      }
-    },
-    "binary_sensor": {
-      "buzzer": {
-        "name": "Buzzer"
       },
       "mouse_change_channel": {
         "name": "Mouse channel switching"
       }
     },
     "sensor": {
-      "hotkey": {
-        "name": "Hotkey"
-      },
       "audio": {
         "name": "Audio routing"
       },

@@ -686,6 +686,116 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_hotkey_and_mouse_capture_updates_only_after_complete_feedback(
+        self,
+    ) -> None:
+        """Commands and partial replies preserve state until complete feedback arrives."""
+        capture = json.loads(
+            (
+                Path(__file__).parent / "fixtures" / "hotkey_mouse_debug_capture.json"
+            ).read_text(encoding="utf-8")
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        expected_commands = [
+            b"shift\r\n",
+            b"ctrl\r\n",
+            b"scroll\r\n",
+            b"ctrl\r\n",
+            b"caps\r\n",
+            b"ctrl\r\n",
+            b"m0\r\n",
+            b"M0\r\n",
+            b"M1\r\n",
+            b"m1\r\n",
+        ]
+        self.assertEqual(len(events), 33)
+        self.assertEqual(sum(direction == "RX" for direction, _ in events), 23)
+        self.assertEqual(
+            [payload for direction, payload in events if direction == "TX"],
+            expected_commands,
+        )
+        expected_lines = [
+            "SHIFT",
+            "CTRL",
+            "SCROLL",
+            "CTRL",
+            "CAPS",
+            "CTRL",
+            "Mouse change channel : OFF",
+            "Mouse change channel : OFF",
+            "Mouse change channel : ON",
+            "Mouse change channel : ON",
+        ]
+        hotkey_states = [
+            {"hotkey": option}
+            for option in ("Shift", "Ctrl", "Scroll Lock", "Ctrl", "Caps Lock", "Ctrl")
+        ]
+        mouse_off = {"hotkey": "Ctrl", "mouse_change_channel": False}
+        mouse_on = {"hotkey": "Ctrl", "mouse_change_channel": True}
+        states_by_complete_lines = [
+            {},
+            *hotkey_states,
+            mouse_off,
+            mouse_off,
+            mouse_on,
+            mouse_on,
+        ]
+        update_counts_by_complete_lines = [0, 1, 2, 3, 4, 5, 6, 7, 7, 8, 8]
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_writes = []
+        received = bytearray()
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            task = self.start_reader()
+            for direction, payload in events:
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                    expected_writes.append(payload)
+                else:
+                    self.reader.feed_data(payload)
+                    received.extend(payload)
+                # Replay each recorded read, without its original elapsed time.
+                await asyncio.sleep(0)
+                complete_lines = received.count(b"\r\n")
+                self.assertEqual(parse.call_count, complete_lines)
+                self.assertEqual(
+                    [call.args[0] for call in parse.call_args_list],
+                    expected_lines[:complete_lines],
+                )
+                self.assertEqual(
+                    self.client.state, states_by_complete_lines[complete_lines]
+                )
+                self.assertEqual(
+                    len(observed), update_counts_by_complete_lines[complete_lines]
+                )
+                self.assertEqual(self.writer.writes, expected_writes)
+
+        self.assertEqual(parse.call_count, 10)
+        self.assertEqual(observed, [*hotkey_states, mouse_off, mouse_on])
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, expected_commands)
+        self.opener.assert_awaited_once()
+        self.assertEqual(
+            [record.getMessage() for record in captured.records],
+            [
+                f"{direction} /dev/test-kvm: {payload!r}"
+                for direction, payload in events
+            ],
+        )
+
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
         complete = asyncio.Event()

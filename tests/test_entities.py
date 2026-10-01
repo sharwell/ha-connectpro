@@ -13,18 +13,22 @@ import pytest_asyncio
 
 from custom_components.connectpro import (
     PLATFORMS,
-    binary_sensor,
     button,
     select,
     sensor,
     switch,
 )
-from custom_components.connectpro.binary_sensor import ConnectProBinarySensor
 from custom_components.connectpro.button import ConnectProResetButton
 from custom_components.connectpro.const import DOMAIN
-from custom_components.connectpro.select import ConnectProChannelSelect
+from custom_components.connectpro.select import (
+    ConnectProChannelSelect,
+    ConnectProHotkeySelect,
+)
 from custom_components.connectpro.sensor import ConnectProSensor
-from custom_components.connectpro.switch import ConnectProBuzzerSwitch
+from custom_components.connectpro.switch import (
+    ConnectProBuzzerSwitch,
+    ConnectProMouseChannelSwitch,
+)
 from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -127,6 +131,78 @@ async def test_channel_rejects_invalid_options_without_writing(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("initial_state", [None, "Ctrl"])
+@pytest.mark.parametrize(
+    ("option", "command"),
+    [
+        ("Ctrl", "ctrl"),
+        ("Shift", "shift"),
+        ("Scroll Lock", "scroll"),
+        ("Caps Lock", "caps"),
+    ],
+)
+async def test_hotkey_selection_sends_tested_commands_and_waits_for_feedback(
+    entry: SimpleNamespace,
+    client: FakeClient,
+    initial_state: str | None,
+    option: str,
+    command: str,
+) -> None:
+    """Exact lowercase commands never optimistically replace observed state."""
+    if initial_state is not None:
+        client.state["hotkey"] = initial_state
+    entity = ConnectProHotkeySelect(entry)
+    assert entity.options == ["Ctrl", "Shift", "Scroll Lock", "Caps Lock"]
+    assert entity.current_option == initial_state
+
+    await entity.async_select_option(option)
+
+    assert client.commands == [command]
+    assert entity.current_option == initial_state
+    client.state["hotkey"] = option
+    assert entity.current_option == option
+
+
+@pytest.mark.asyncio
+async def test_hotkey_change_back_before_feedback_is_not_dropped(
+    entry: SimpleNamespace, client: FakeClient
+) -> None:
+    """A request matching stale feedback still follows the intervening request."""
+    client.state["hotkey"] = "Ctrl"
+    entity = ConnectProHotkeySelect(entry)
+
+    await entity.async_select_option("Shift")
+    await entity.async_select_option("Ctrl")
+
+    assert client.commands == ["shift", "ctrl"]
+    assert entity.current_option == "Ctrl"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", ["ctrl", "CTRL", "Scroll", "Alt", "", "shift\r\n"])
+async def test_hotkey_rejects_invalid_options_without_writing(
+    entry: SimpleNamespace, client: FakeClient, option: str
+) -> None:
+    """Only the four supported options can produce a hotkey command."""
+    with pytest.raises(ServiceValidationError, match="Unsupported ConnectPro hotkey"):
+        await ConnectProHotkeySelect(entry).async_select_option(option)
+    assert client.commands == []
+
+
+@pytest.mark.parametrize("value", ["ALT", "CTRL", "", True, False])
+def test_hotkey_unrecognized_state_remains_unknown(
+    entry: SimpleNamespace, client: FakeClient, value: str | bool
+) -> None:
+    """Unsupported observed values are not exposed as selectable options."""
+    client.state["hotkey"] = value
+    assert ConnectProHotkeySelect(entry).current_option is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entity_type", "option"),
+    [(ConnectProChannelSelect, "Channel 3"), (ConnectProHotkeySelect, "Shift")],
+)
 @pytest.mark.parametrize(
     ("error", "expected_type"),
     [
@@ -139,15 +215,17 @@ async def test_channel_rejects_invalid_options_without_writing(
 async def test_command_errors_are_exposed_as_home_assistant_errors(
     entry: SimpleNamespace,
     client: FakeClient,
+    entity_type: type,
+    option: str,
     error: Exception,
     expected_type: type[HomeAssistantError],
 ) -> None:
     """Transport failures reach callers without optimistic state changes."""
     client.send_error = error
-    entity = ConnectProChannelSelect(entry)
+    entity = entity_type(entry)
 
     with pytest.raises(expected_type, match=str(error)) as raised:
-        await entity.async_select_option("Channel 3")
+        await entity.async_select_option(option)
 
     assert raised.value.__cause__ is error
     assert entity.current_option is None
@@ -170,12 +248,31 @@ async def test_reset_button_sends_exact_command(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("initial_state", [None, False, True])
 @pytest.mark.parametrize(
-    ("action", "command", "reported_state"),
-    [("async_turn_on", "BZON", True), ("async_turn_off", "BZOFF", False)],
+    ("entity_type", "state_key", "action", "command", "reported_state"),
+    [
+        (ConnectProBuzzerSwitch, "buzzer", "async_turn_on", "BZON", True),
+        (ConnectProBuzzerSwitch, "buzzer", "async_turn_off", "BZOFF", False),
+        (
+            ConnectProMouseChannelSwitch,
+            "mouse_change_channel",
+            "async_turn_on",
+            "M1",
+            True,
+        ),
+        (
+            ConnectProMouseChannelSwitch,
+            "mouse_change_channel",
+            "async_turn_off",
+            "M0",
+            False,
+        ),
+    ],
 )
-async def test_buzzer_switch_waits_for_feedback_even_when_request_matches_state(
+async def test_switch_waits_for_feedback_even_when_request_matches_state(
     entry: SimpleNamespace,
     client: FakeClient,
+    entity_type: type,
+    state_key: str,
     initial_state: bool | None,
     action: str,
     command: str,
@@ -183,19 +280,26 @@ async def test_buzzer_switch_waits_for_feedback_even_when_request_matches_state(
 ) -> None:
     """Every request sends its command; only received state changes the switch."""
     if initial_state is not None:
-        client.state["buzzer"] = initial_state
-    entity = ConnectProBuzzerSwitch(entry)
+        client.state[state_key] = initial_state
+    entity = entity_type(entry)
     assert entity.is_on is initial_state
 
     await getattr(entity, action)()
 
     assert client.commands == [command]
     assert entity.is_on is initial_state
-    client.state["buzzer"] = reported_state
+    client.state[state_key] = reported_state
     assert entity.is_on is reported_state
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entity_type", "state_key"),
+    [
+        (ConnectProBuzzerSwitch, "buzzer"),
+        (ConnectProMouseChannelSwitch, "mouse_change_channel"),
+    ],
+)
 @pytest.mark.parametrize("action", ["async_turn_on", "async_turn_off"])
 @pytest.mark.parametrize(
     ("error", "expected_type"),
@@ -206,17 +310,19 @@ async def test_buzzer_switch_waits_for_feedback_even_when_request_matches_state(
         (ValueError("invalid command"), ServiceValidationError),
     ],
 )
-async def test_buzzer_switch_surfaces_command_failures_without_changing_state(
+async def test_switch_surfaces_command_failures_without_changing_state(
     entry: SimpleNamespace,
     client: FakeClient,
+    entity_type: type,
+    state_key: str,
     action: str,
     error: Exception,
     expected_type: type[HomeAssistantError],
 ) -> None:
     """A failed switch request preserves observed state and reaches the caller."""
-    client.state["buzzer"] = False
+    client.state[state_key] = False
     client.send_error = error
-    entity = ConnectProBuzzerSwitch(entry)
+    entity = entity_type(entry)
 
     with pytest.raises(expected_type, match=str(error)) as raised:
         await getattr(entity, action)()
@@ -226,44 +332,44 @@ async def test_buzzer_switch_surfaces_command_failures_without_changing_state(
     assert client.commands == []
 
 
-def test_buzzer_control_preserves_legacy_sensor_identity_and_registration_defaults(
-    entry: SimpleNamespace,
+@pytest.mark.parametrize(
+    ("entity_type", "key"),
+    [
+        (ConnectProHotkeySelect, "hotkey"),
+        (ConnectProBuzzerSwitch, "buzzer"),
+        (ConnectProMouseChannelSwitch, "mouse_change_channel"),
+    ],
+)
+def test_setting_controls_are_enabled_configuration_entities(
+    entry: SimpleNamespace, entity_type: type, key: str
 ) -> None:
-    """The new control coexists with the existing sensor without changing its ID."""
-    control = ConnectProBuzzerSwitch(entry)
-    legacy = ConnectProBinarySensor(entry, "buzzer")
-    mouse = ConnectProBinarySensor(entry, "mouse_change_channel")
+    """Controls belong to the shared device and expose configuration settings."""
+    control = entity_type(entry)
 
-    assert control.unique_id == legacy.unique_id == "entry-1_buzzer"
-    assert control.translation_key == legacy.translation_key == "buzzer"
+    assert control.unique_id == f"entry-1_{key}"
+    assert control.translation_key == key
     assert control.entity_category is EntityCategory.CONFIG
     assert control.entity_registry_enabled_default is True
-    assert control.device_class is None
-    assert legacy.entity_category is None
-    assert legacy.entity_registry_enabled_default is False
-    assert mouse.entity_registry_enabled_default is True
 
 
-@pytest.mark.parametrize("key", ["buzzer", "mouse_change_channel"])
-def test_binary_sensors_distinguish_unknown_off_and_on(
-    entry: SimpleNamespace, client: FakeClient, key: str
+@pytest.mark.asyncio
+async def test_mouse_switch_change_back_before_feedback_is_not_dropped(
+    entry: SimpleNamespace, client: FakeClient
 ) -> None:
-    """An unobserved setting remains unknown instead of defaulting to off."""
-    entity = ConnectProBinarySensor(entry, key)
-    assert entity.is_on is None
-    client.state[key] = False
+    """Turning off again must follow the pending on request, despite stale off state."""
+    client.state["mouse_change_channel"] = False
+    entity = ConnectProMouseChannelSwitch(entry)
+
+    await entity.async_turn_on()
+    await entity.async_turn_off()
+
+    assert client.commands == ["M1", "M0"]
     assert entity.is_on is False
-    client.state[key] = True
-    assert entity.is_on is True
 
 
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("hotkey", "Ctrl"),
-        ("hotkey", "Shift"),
-        ("hotkey", "Scroll Lock"),
-        ("hotkey", "Caps Lock"),
         ("audio", "Sync"),
         ("hub1", "Sync"),
         ("hub2", "Sync"),
@@ -272,7 +378,7 @@ def test_binary_sensors_distinguish_unknown_off_and_on(
 def test_text_sensors_expose_only_observed_values(
     entry: SimpleNamespace, client: FakeClient, key: str, value: str
 ) -> None:
-    """Hotkey and routing observations are available without write controls."""
+    """Routing observations remain available without unconfirmed write controls."""
     entity = ConnectProSensor(entry, key)
     assert entity.native_value is None
     client.state[key] = value
@@ -288,7 +394,6 @@ async def test_platforms_share_device_identity_and_connection_availability(
     platforms = {
         Platform.SELECT: select,
         Platform.BUTTON: button,
-        Platform.BINARY_SENSOR: binary_sensor,
         Platform.SENSOR: sensor,
         Platform.SWITCH: switch,
     }
@@ -301,11 +406,10 @@ async def test_platforms_share_device_identity_and_connection_availability(
         )
 
     expected_keys = {
-        Platform.SELECT: {"channel"},
+        Platform.SELECT: {"channel", "hotkey"},
         Platform.BUTTON: {"reset"},
-        Platform.BINARY_SENSOR: {"buzzer", "mouse_change_channel"},
-        Platform.SENSOR: {"hotkey", "audio", "hub1", "hub2"},
-        Platform.SWITCH: {"buzzer"},
+        Platform.SENSOR: {"audio", "hub1", "hub2"},
+        Platform.SWITCH: {"buzzer", "mouse_change_channel"},
     }
     identities = []
     for domain, platform_entities in entities_by_platform.items():
@@ -323,6 +427,7 @@ async def test_platforms_share_device_identity_and_connection_availability(
         for platform_entities in entities_by_platform.values()
         for entity in platform_entities
     ]
+    assert len(entities) == 8
     for entity in entities:
         assert entity.has_entity_name is True
         assert entity.should_poll is False
@@ -352,7 +457,9 @@ def test_device_name_falls_back_when_entry_title_is_empty(
     ("entity_type", "entity_id"),
     [
         (ConnectProChannelSelect, "select.connectpro_channel"),
+        (ConnectProHotkeySelect, "select.connectpro_hotkey"),
         (ConnectProBuzzerSwitch, "switch.connectpro_buzzer"),
+        (ConnectProMouseChannelSwitch, "switch.connectpro_mouse_channel_switching"),
     ],
 )
 async def test_entity_listener_updates_state_and_unsubscribes_on_removal(
@@ -372,7 +479,14 @@ async def test_entity_listener_updates_state_and_unsubscribes_on_removal(
         await entity.async_added_to_hass()
         assert len(client.listeners) == 1
 
-        client.state.update({"channel": "Channel 3", "buzzer": True})
+        client.state.update(
+            {
+                "channel": "Channel 3",
+                "hotkey": "Shift",
+                "buzzer": True,
+                "mouse_change_channel": True,
+            }
+        )
         client.notify()
         write_state.assert_called_once_with()
 

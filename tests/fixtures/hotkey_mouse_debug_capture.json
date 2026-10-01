@@ -1,0 +1,182 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "user_context": "Here's some testing of the hotkey and mouse change channel commands",
+  "user_observations": {
+    "verification": "The user verified the selected hotkeys and mouse channel switching in use.",
+    "chain_effect": "Both linked KVMs were affected."
+  },
+  "observation_scope": "These observations apply to the user's linked setup. The host log does not identify which KVM emitted each reply, the mouse gesture was not specified, and behavior in other installations is not established.",
+  "case_observations": {
+    "hotkey": "Only lowercase shift, ctrl, scroll, and caps were tested in this capture.",
+    "mouse": "m0 and M0 produced matching OFF feedback; M1 and m1 produced matching ON feedback. This does not establish general case insensitivity."
+  },
+  "events": [
+    {
+      "direction": "TX",
+      "time": "11:47:29.032",
+      "ascii": "shift\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:47:29.054",
+      "ascii": "SHIF"
+    },
+    {
+      "direction": "RX",
+      "time": "11:47:29.056",
+      "ascii": "T\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:47:34.035",
+      "ascii": "ctrl\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:47:34.055",
+      "ascii": "CT"
+    },
+    {
+      "direction": "RX",
+      "time": "11:47:34.057",
+      "ascii": "RL\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:47:41.567",
+      "ascii": "scroll\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:47:41.588",
+      "ascii": "SC"
+    },
+    {
+      "direction": "RX",
+      "time": "11:47:41.589",
+      "ascii": "ROLL\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:47:45.485",
+      "ascii": "ctrl\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:47:45.506",
+      "ascii": "CTR"
+    },
+    {
+      "direction": "RX",
+      "time": "11:47:45.507",
+      "ascii": "L\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:49:13.568",
+      "ascii": "caps\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:13.588",
+      "ascii": "CAPS\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:49:17.377",
+      "ascii": "ctrl\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:17.398",
+      "ascii": "CTR"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:17.400",
+      "ascii": "L\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:49:24.336",
+      "ascii": "m0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:24.356",
+      "ascii": "Mo"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:24.358",
+      "ascii": "use change c"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:24.359",
+      "ascii": "hannel : OF"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:24.361",
+      "ascii": "F\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:49:35.329",
+      "ascii": "M0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:35.349",
+      "ascii": "Mouse "
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:35.351",
+      "ascii": "change chan"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:35.353",
+      "ascii": "nel : OFF\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:49:40.604",
+      "ascii": "M1\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:40.625",
+      "ascii": "Mouse cha"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:40.627",
+      "ascii": "nge channel"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:40.629",
+      "ascii": " : ON\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:49:46.359",
+      "ascii": "m1\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:46.380",
+      "ascii": "Mouse chang"
+    },
+    {
+      "direction": "RX",
+      "time": "11:49:46.383",
+      "ascii": "e channel : ON\r\n"
+    }
+  ]
+}

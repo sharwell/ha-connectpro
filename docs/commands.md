@@ -21,6 +21,9 @@ far from the current Home Assistant setup:
 - A captured `bzon`, `BZON`, and `BZOFF` sequence on 2026-10-01, with
   matching `BZON` / `BZOFF` feedback, audible buzzer confirmation, and
   the user's qualified report that the commands appear to affect both KVMs
+- A captured sequence of lowercase hotkey commands and lowercase/uppercase
+  mouse channel-switching commands on 2026-10-01, with physical verification
+  of both features and their effect on both linked KVMs
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -33,9 +36,9 @@ which physical KVM changed channel. The meanings of every command are not
 yet established.
 
 The tables below preserve the original YAML setup as protocol evidence.
-The integration now implements channel selection, buzzer control, and the
-`W0` display action,
-receives the listed state feedback into native entities, and offers a
+The integration now implements channel and hotkey selection, buzzer and
+mouse channel-switching controls, and the `W0` display action. It receives
+the listed state feedback into native entities and offers a
 generic command action. See the [README](../README.md) for installation,
 migration, and logging instructions. The old helpers and shell actions are
 not required by the integration.
@@ -208,9 +211,10 @@ establishes effects for uppercase `K1P1` and `K2P1` in one two-KVM chain;
 it does not verify every lowercase sender above. A subsequent buzzer
 capture confirms `bzon` and `BZON` receiving `BZON`, and `BZOFF`
 receiving `BZOFF`. The lowercase `bzoff` sender remains untested in these
-captures. Other command meanings remain unconfirmed on this hardware;
-names alone do not prove a mapping to hotkey, mouse, audio, hub, or other
-features.
+captures. The hotkey and mouse capture below establishes command-associated
+feedback for `ctrl`, `shift`, `scroll`, `caps`, and both cases of `M0` /
+`M1`. Other command meanings remain unconfirmed on this hardware; names
+alone do not prove a mapping to audio, hub, or other features.
 
 ### Report observed after `K1P0`
 
@@ -540,6 +544,51 @@ The replay regression verifies the three exact writes, four raw reads,
 complete-line parsing, state changes, continued connection, and no extra
 commands. Captured host timestamps do not establish response deadlines.
 
+### Debug capture after hotkey and mouse commands
+
+On 2026-10-01 the user tested the hotkey settings and mouse channel
+switching through the integration's manual command action. The
+[capture fixture](../tests/fixtures/hotkey_mouse_debug_capture.json)
+preserves all 33 ordered events: ten command writes and 23 raw reads.
+The user also verified the selected hotkeys and mouse channel switching
+in use and confirmed that the changes affect both linked KVMs.
+
+| Command | TX timestamp | Complete reply | RX read count |
+| --- | --- | --- | --- |
+| `shift` | `11:47:29.032` | `SHIFT\r\n` | 2 |
+| `ctrl` | `11:47:34.035` | `CTRL\r\n` | 2 |
+| `scroll` | `11:47:41.567` | `SCROLL\r\n` | 2 |
+| `ctrl` | `11:47:45.485` | `CTRL\r\n` | 2 |
+| `caps` | `11:49:13.568` | `CAPS\r\n` | 1 |
+| `ctrl` | `11:49:17.377` | `CTRL\r\n` | 2 |
+| `m0` | `11:49:24.336` | `Mouse change channel : OFF\r\n` | 4 |
+| `M0` | `11:49:35.329` | `Mouse change channel : OFF\r\n` | 3 |
+| `M1` | `11:49:40.604` | `Mouse change channel : ON\r\n` | 3 |
+| `m1` | `11:49:46.359` | `Mouse change channel : ON\r\n` | 2 |
+
+All ten complete replies match the existing parser and original automation.
+The hotkey state progresses through `Shift`, `Ctrl`, `Scroll Lock`, `Ctrl`,
+`Caps Lock`, and `Ctrl`. Mouse channel switching then reports off twice,
+followed by on twice. The Hotkey selector maps these four options to the
+tested lowercase commands. The Mouse channel switching switch uses tested
+uppercase `M1` for on and `M0` for off.
+
+Both cases of the two mouse commands produced identical normalized
+feedback. Uppercase hotkey commands were not tested, and this capture
+does not establish general case insensitivity for other commands or
+firmware. The host log does not identify which KVM produced each reply.
+The physical observation establishes effects on both units in this
+installation, without establishing behavior in other chain topologies.
+The mouse gesture used was not specified.
+
+The reader waits for each complete line; fragments such as `SHIF` or
+`Mouse cha` are not state reports. Outgoing commands do not update state.
+The replay regression verifies all ten writes, 23 reads, and ten parsed
+lines. There are eight state-change notifications: six hotkey changes and
+two mouse changes. The repeated off/on mouse replies are parsed without
+duplicate notifications. The connection remains open and no extra commands
+are sent. Timestamps describe the host log, not response deadlines.
+
 ## Dashboard and channel request behavior
 
 ### Channel buttons
@@ -600,17 +649,18 @@ case. The stock serial sensor strips leading and trailing whitespace
 before publishing its state, as described above. The configured sensor
 has no additional value template. These are processed sensor state
 strings. The later debug captures establish CRLF response terminators for
-the supplied `K1P0`, targeted-channel, `W0`, and buzzer exchanges; framing for
-other commands and hardware configurations remains unverified.
+the supplied status, targeted-channel, display, buzzer, hotkey, and mouse
+exchanges; framing for other commands and hardware configurations remains
+unverified.
 
 For select helpers, the automation calls `input_select.select_option` with
 the exact option shown below. For boolean helpers, it calls
 `input_boolean.turn_on` or `input_boolean.turn_off` as indicated. These
 helpers belong to the original hand-rolled setup. The integration exposes
-a native channel select, a buzzer switch, sensors for hotkey/audio/hub
-modes, and a mouse channel-switching binary sensor instead of writing
-these helpers. The read-only buzzer binary sensor is retained for existing
-installations and disabled by default when newly registered.
+native channel and hotkey selectors, buzzer and mouse channel-switching
+switches, and sensors for audio/hub modes instead of writing these helpers.
+The earlier read-only hotkey, buzzer, and mouse entities are removed during
+prerelease development; each control also reports its observed state.
 
 ### Channel updates
 
@@ -715,13 +765,15 @@ The channel select sends `Ch1` through `Ch4`, and the Reset displays button
 sends `W0`. The button retains its existing `reset` entity key and unique
 ID; changing its display name does not create a replacement entity. Its
 `Wake-Up : DP-ALL` reply is debug logged without fabricating state.
-The Buzzer switch sends `BZON` or `BZOFF` on every on/off request, including
-requests matching the last observed state. Its state remains unknown until
-buzzer feedback arrives and changes only from recognized feedback. It uses
-the same observed `buzzer` state as the retained read-only binary sensor;
-the latter is disabled by default for newly registered entities. Existing
-registry enablement is preserved. Neither the switch nor the binary
-sensor claims separate state for each linked KVM.
+
+The Buzzer switch sends `BZON` or `BZOFF`; the Mouse channel switching
+switch sends `M1` or `M0`. The Hotkey selector sends `ctrl`, `shift`,
+`scroll`, or `caps` for `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock`.
+Each control sends every valid request, including requests matching the
+last observed state. Their states remain unknown until feedback arrives
+and change only from recognized feedback. They do not track separate
+state for linked KVMs. Converted settings have no compatibility sensors;
+the binary sensor platform and the earlier hotkey sensor are removed.
 
 Every valid channel selection sends a command, including a selection
 that matches the last observed channel. Unlike the old script's guard,
@@ -774,6 +826,9 @@ To complete the reference, collect:
   and other chain topologies. The user heard the buzzer and reported that
   commands appear to affect both units; the reply origin and general
   chain scope remain unconfirmed. Lowercase `bzoff` is untested.
+- The mouse gesture used for channel switching and behavior in other
+  chain topologies. The user has verified hotkey and mouse settings in
+  use on both linked KVMs; the source of each serial reply remains unknown.
 - A serial `Ch1` comparison with linked units initially on different
   channels, to establish its synchronized-switching scope separately from
   physical button behavior. Per-unit state feedback and response origins
