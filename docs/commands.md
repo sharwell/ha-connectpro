@@ -14,6 +14,8 @@ far from the current Home Assistant setup:
   2026-10-01, with the user's daisy-chain context
 - A later debug log and physical observations of `K1P1`, `K2P1`, and
   channel-2 button presses in a two-KVM chain on 2026-10-01
+- A subsequent capture of `K1P1`, `K1P0`, and a physical channel-2 button
+  press on 2026-10-01, plus a separate captured `K2P0` / `ERROR` exchange
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -386,7 +388,8 @@ The same table labels `chX` as synchronized channel selection. This test
 does not send `Ch1`, so it does not confirm that serial `Ch1` switches both
 linked units or establish what synchronized switching includes. Additional
 ports, levels, chain lengths, and lowercase equivalence remain untested.
-`K1P0` status-report behavior should not be generalized to `K2P0` yet.
+`K1P0` status-report behavior should not be generalized to `K2P0`; the
+additional capture below shows `K2P0` receiving `ERROR`.
 
 The integration currently logs `OK` and received `K1P1` as unrecognized
 lines without changing state. Neither is an addressed channel-state
@@ -401,6 +404,62 @@ The replay regression verifies both manual writes, raw RX logging, and
 that these two non-state replies do not fabricate a channel update. The
 final split `CH2` produces one state report only when the terminator
 arrives, and the reader stays connected without sending extra commands.
+
+### Local status after targeted channel selection
+
+The next supplied debug log records `K1P1`, then `K1P0`, followed by a
+physical channel-2 button press on 2026-10-01. The
+[capture fixture](../tests/fixtures/local_status_after_targeted_switch.json)
+preserves all 21 ordered raw TX/RX events, timestamps, and read boundaries.
+The sequence is:
+
+| Action | TX timestamp | Received output |
+| --- | --- | --- |
+| Send `K1P1` | `11:10:25.613` | `OK\r\n` at `11:10:25.635` |
+| Send `K1P0` | `11:10:33.025` | 19-line report in 17 reads from `11:10:33.030` to `11:10:33.077` |
+| Press physical channel-2 button | No integration TX | `CH2\r\n` at `11:10:41.945` |
+
+The `K1P0` report contains `CH-1`. Reassembling its 378 bytes yields
+exactly the earlier debug report with `CH-2` changed to `CH-1`; all other
+bytes, including trailing spaces and CRLF terminators, match. Buzzer
+remains `OFF`, hotkey `CTRL`, mouse channel switching `OFF`, and both
+hubs and audio `Sync`. Component versions remain `0009 - D1223`, and
+the eight firmware messages remain `B1.42`. `V1P0` and `V1P1` are unchanged.
+
+Together with the prior physical observation that `K1P1` switches the
+first KVM, the matching `CH-1` supports interpreting `K1P0` as a status
+request for the first/local unit. It is not evidence of a synchronized
+whole-chain channel state or an addressed report for each linked unit.
+The host capture alone does not identify the source of every version or
+state line. The user did not supply an additional physical before/after
+comparison of other settings for this sequence, so it does not establish
+that `K1P0` is read-only in every respect.
+
+The reader leaves state unchanged after `OK`, updates channel to
+`Channel 1` from `CH-1`, fills the other six recognized state categories,
+then updates only channel to `Channel 2` after the physical-button `CH2`.
+The replay regression verifies these transitions, the exact command writes
+and raw reads, existing unknown/ignored diagnostics, continued connection,
+and the absence of unsolicited commands. The captured timestamps are host
+log times, not protocol response deadlines.
+
+The user separately supplied the earlier unsuccessful `K2P0` attempt,
+preserved in its own
+[capture fixture](../tests/fixtures/k2p0_error_debug_capture.json):
+
+| Direction | Timestamp | Raw bytes |
+| --- | --- | --- |
+| TX | `11:07:43.429` | `b'K2P0\r\n'` |
+| RX | `11:07:43.437` | `b'ERROR\r\n'` |
+
+This is an explicit error reply, not a missing response. It rejects this
+attempt to retrieve the second KVM's status, despite `K2P1` successfully
+selecting that unit's channel. This supports treating `K1P0` as a special
+local status request rather than assuming `KxP0` works for every chain
+level. It does not establish whether the error came from the first KVM or
+a downstream unit, or whether another command can retrieve downstream
+status. The reader logs `ERROR` as an unrecognized line without changing
+observed state, disconnecting, or retrying the command.
 
 ## Dashboard and channel request behavior
 
@@ -551,9 +610,11 @@ These examples describe the supplied automation and script logic. The
 sequence. The subsequent debug capture adds raw byte framing, read
 boundaries, and host log timing for another such report. Neither records
 before/after device state. The targeted channel capture separately adds
-physical before/after observations for `K1P1` and `K2P1`. The meaning of
-`K1P0`, general acknowledgment rules, and the origin of each reply within
-a daisy chain remain unknown.
+physical before/after observations for `K1P1` and `K2P1`. The next
+`K1P1` / `K1P0` capture adds a report whose channel matches the first
+KVM's selected channel, followed by physical-button feedback. The possible
+side effects of `K1P0`, general acknowledgment rules, and the origin of
+each reply within a daisy chain remain unknown.
 
 ## Current integration behavior
 
@@ -562,8 +623,10 @@ serial settings on connection, reconnects after connection failures, and
 parses the confirmed feedback into native entities. It does not assume
 that a successful write means the requested state has taken effect.
 Values remain unknown until feedback arrives after connection. The
-`K1P0` report is a candidate for future state discovery, but its effect
-has not been confirmed, so no automatic startup or status command is sent.
+manual `K1P0` reports update the recognized state categories; the tested
+channel value is consistent with the first/local KVM. Side effects and
+downstream status retrieval remain unconfirmed, and no automatic startup
+or status command is sent.
 
 The channel select sends `Ch1` through `Ch4`, and the Reset button sends
 `W0`. Every valid channel selection sends a command, including a selection
@@ -578,8 +641,9 @@ additional features.
 
 The targeted channel commands can selectively switch linked units through
 the manual action, but their observed replies do not update the Channel
-entity. The current entities describe recognized feedback on one serial
-connection; they do not track each unit in a chain separately.
+entity. A subsequent manual `K1P0` can supply recognized channel feedback,
+as the later capture demonstrates. The current entities describe feedback
+on one serial connection; they do not track each unit in a chain separately.
 
 Debug logging records the device path, `TX`/`RX` direction, and escaped
 bytes, including line endings. Unrecognized incoming messages are logged
@@ -604,10 +668,12 @@ To complete the reference, collect:
   `input_select.kvm_hub2`.
 - The actual effect of the `Reset` button (`W0`), including which state or
   settings it changes.
-- The purpose and possible side effects of `K1P0`. The `K1P1` and `K2P1`
-  channel-selection effects are now observed in this installation, but
-  other ports/levels, lowercase equivalence, and status queries for linked
-  units still need confirmation.
+- Any side effects of `K1P0` beyond returning the observed status report.
+  The `K1P1` and `K2P1` channel-selection effects are observed in this
+  installation, but other ports/levels and lowercase equivalence still
+  need confirmation.
+- Whether another command can retrieve downstream status, how those
+  responses return to the host, and which unit produced the `K2P0` error.
 - A serial `Ch1` comparison with linked units initially on different
   channels, to establish its synchronized-switching scope separately from
   physical button behavior. Per-unit state feedback and response origins

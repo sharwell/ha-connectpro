@@ -1,0 +1,27 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "context": "The user tried K2P0 to request the second KVM's status. The captured ERROR reply does not establish the rejection reason.",
+  "events": [
+    {
+      "direction": "TX",
+      "time": "11:07:43.429",
+      "ascii": "K2P0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:07:43.437",
+      "ascii": "ERROR\r\n"
+    }
+  ],
+  "logged_diagnostics": [
+    {
+      "time": "11:07:43.438",
+      "level": "DEBUG",
+      "classification": "unrecognized line",
+      "line": "ERROR"
+    }
+  ],
+  "subsequent_capture": "local_status_after_targeted_switch.json"
+}

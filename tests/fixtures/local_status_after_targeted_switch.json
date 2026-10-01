@@ -1,0 +1,182 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "capture_notes": "Raw TX/RX byte records are preserved. Separate normalized unrecognized/ignored diagnostic records are excluded.",
+  "events": [
+    {
+      "id": "event_01",
+      "direction": "TX",
+      "time": "11:10:25.613",
+      "ascii": "K1P1\r\n"
+    },
+    {
+      "id": "event_02",
+      "direction": "RX",
+      "time": "11:10:25.635",
+      "ascii": "OK\r\n"
+    },
+    {
+      "id": "event_03",
+      "direction": "TX",
+      "time": "11:10:33.025",
+      "ascii": "K1P0\r\n"
+    },
+    {
+      "id": "event_04",
+      "direction": "RX",
+      "time": "11:10:33.030",
+      "ascii": "UDP2_14AP"
+    },
+    {
+      "id": "event_05",
+      "direction": "RX",
+      "time": "11:10:33.032",
+      "ascii": "_U3 : Version_Number - 0009 - D122"
+    },
+    {
+      "id": "event_06",
+      "direction": "RX",
+      "time": "11:10:33.034",
+      "ascii": "3 \r\nUDP2_14AP_DP : Vers"
+    },
+    {
+      "id": "event_07",
+      "direction": "RX",
+      "time": "11:10:33.037",
+      "ascii": "ion_Number - 0009 - D12"
+    },
+    {
+      "id": "event_08",
+      "direction": "RX",
+      "time": "11:10:33.038",
+      "ascii": "23 \r\nCH-1\r\nHo"
+    },
+    {
+      "id": "event_09",
+      "direction": "RX",
+      "time": "11:10:33.047",
+      "ascii": "t KEY : CTRL\r\nBuzzer : OFF\r\nHUB1 : Sync"
+    },
+    {
+      "id": "event_10",
+      "direction": "RX",
+      "time": "11:10:33.050",
+      "ascii": "\r\nHUB2 : Sync\r\nAUDIO : Sync\r\nMouse change channel : OF"
+    },
+    {
+      "id": "event_11",
+      "direction": "RX",
+      "time": "11:10:33.052",
+      "ascii": "F\r\nV1P0\r\nV1P1\r\nK50_0 FW V"
+    },
+    {
+      "id": "event_12",
+      "direction": "RX",
+      "time": "11:10:33.054",
+      "ascii": "er B1.42 \r\nK50_1 FW Ver B"
+    },
+    {
+      "id": "event_13",
+      "direction": "RX",
+      "time": "11:10:33.057",
+      "ascii": "1.42 \r\nK50_2 "
+    },
+    {
+      "id": "event_14",
+      "direction": "RX",
+      "time": "11:10:33.059",
+      "ascii": "FW Ver B1.42 \r\n"
+    },
+    {
+      "id": "event_15",
+      "direction": "RX",
+      "time": "11:10:33.061",
+      "ascii": "K50_3 FW Ver B1.42 \r\n"
+    },
+    {
+      "id": "event_16",
+      "direction": "RX",
+      "time": "11:10:33.063",
+      "ascii": "K50_4 FW Ver B"
+    },
+    {
+      "id": "event_17",
+      "direction": "RX",
+      "time": "11:10:33.065",
+      "ascii": "1.42 \r\nK50_5 FW Ver B"
+    },
+    {
+      "id": "event_18",
+      "direction": "RX",
+      "time": "11:10:33.067",
+      "ascii": "1.42 \r\nK50_6 F"
+    },
+    {
+      "id": "event_19",
+      "direction": "RX",
+      "time": "11:10:33.074",
+      "ascii": "W Ver B1.42 \r\nK50_7 F"
+    },
+    {
+      "id": "event_20",
+      "direction": "RX",
+      "time": "11:10:33.077",
+      "ascii": "W Ver B1.42 \r\n"
+    },
+    {
+      "id": "event_21",
+      "direction": "RX",
+      "time": "11:10:41.945",
+      "ascii": "CH2\r\n"
+    }
+  ],
+  "user_sequence": [
+    {
+      "step": 1,
+      "action": "Send K1P1 through Home Assistant",
+      "associated_log_events": [
+        "event_01",
+        "event_02"
+      ]
+    },
+    {
+      "step": 2,
+      "action": "Send K1P0 through Home Assistant",
+      "associated_log_events": [
+        "event_03",
+        "event_04",
+        "event_05",
+        "event_06",
+        "event_07",
+        "event_08",
+        "event_09",
+        "event_10",
+        "event_11",
+        "event_12",
+        "event_13",
+        "event_14",
+        "event_15",
+        "event_16",
+        "event_17",
+        "event_18",
+        "event_19",
+        "event_20"
+      ]
+    },
+    {
+      "step": 3,
+      "action": "Press the physical channel 2 button again",
+      "associated_log_events": [
+        "event_21"
+      ]
+    }
+  ],
+  "related_user_report": {
+    "command": "K2P0",
+    "statement": "I tried running K2P0 to see if it would give the status of the second KVM, but it did not work.",
+    "logged_capture": "k2p0_error_debug_capture.json",
+    "observed_reply": "ERROR",
+    "limitation": "The ERROR reply does not establish why the request was rejected."
+  }
+}

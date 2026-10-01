@@ -82,10 +82,11 @@ existing entities are preserved.
 The sensors describe observed state. Their corresponding controls are not
 exposed until the command meanings are confirmed. State remains unknown
 until the relevant feedback arrives; sending a command does not establish
-that it succeeded. An old email and a subsequent debug capture associate
-`K1P0` with a report containing all seven known state categories, but its
-purpose and possible setting changes remain unconfirmed. Later observations
-confirm that `K1P1` switches only the first KVM to channel 1 and `K2P1`
+that it succeeded. Repeated captures show `K1P0` producing a report
+containing all seven known state categories. After `K1P1`, this report
+contains `CH-1`, consistent with the first/local KVM's channel. Possible
+effects on other settings remain unconfirmed. Observations also confirm
+that `K1P1` switches only the first KVM to channel 1 and `K2P1`
 switches only the second in the user's two-device chain. These commands
 are available through the manual command action; the integration creates
 one device per serial connection, without separate channel entities for
@@ -138,6 +139,13 @@ The Channel entity retains the last recognized `CH1` / `CH-1` through
 After these manual commands, the entity can retain an earlier value while
 the linked KVMs are on different channels. Neither reply identifies their
 individual channel states.
+
+A later [manual status capture](docs/commands.md#local-status-after-targeted-channel-selection)
+shows `K1P0` updating the Channel entity to `Channel 1`, followed by a
+physical channel-2 button press updating it to `Channel 2`. This does not
+provide separate state for linked units. A separate captured `K2P0`
+attempt returned `ERROR`, so that command did not retrieve the second
+KVM's status in this installation.
 
 ## Debugging serial communication
 

@@ -358,6 +358,175 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         for line in ("OK", "K1P1"):
             self.assertIn(f"RX /dev/test-kvm unrecognized line: {line!r}", messages)
 
+    async def test_k2p0_error_capture_preserves_observed_state(self) -> None:
+        """A rejected manual query leaves known state and the connection intact."""
+        capture = json.loads(
+            (
+                Path(__file__).parent / "fixtures" / "k2p0_error_debug_capture.json"
+            ).read_text(encoding="utf-8")
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        self.assertEqual(events, [("TX", b"K2P0\r\n"), ("RX", b"ERROR\r\n")])
+        await self.client.async_connect()
+        task = self.start_reader()
+        # Establish known state from supported responses before the capture.
+        # These setup bytes are synthetic, not part of the user's log.
+        self.reader.feed_data(b"CH-2\r\nBZOFF\r\n")
+        await asyncio.sleep(0)
+        baseline = {"channel": "Channel 2", "buzzer": False}
+        self.assertEqual(self.client.state, baseline)
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            for direction, payload in events:
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                else:
+                    self.reader.feed_data(payload)
+                await asyncio.sleep(0)
+                self.assertEqual(self.client.state, baseline)
+                self.assertTrue(self.client.connected)
+
+        self.assertEqual([call.args[0] for call in parse.call_args_list], ["ERROR"])
+        self.assertEqual(observed, [])
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, [b"K2P0\r\n"])
+        self.opener.assert_awaited_once()
+        self.assertTrue(all(record.levelname == "DEBUG" for record in captured.records))
+        messages = [record.getMessage() for record in captured.records]
+        self.assertEqual(
+            messages,
+            [
+                "TX /dev/test-kvm: b'K2P0\\r\\n'",
+                "RX /dev/test-kvm: b'ERROR\\r\\n'",
+                "RX /dev/test-kvm unrecognized line: 'ERROR'",
+            ],
+        )
+
+    async def test_status_after_targeted_switch_updates_only_observed_state(
+        self,
+    ) -> None:
+        """A status report confirms channel 1 before a physical CH2 update."""
+        capture = json.loads(
+            (
+                Path(__file__).parent
+                / "fixtures"
+                / "local_status_after_targeted_switch.json"
+            ).read_text(encoding="utf-8")
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        self.assertEqual(len(events), 21)
+        self.assertEqual(
+            [payload for direction, payload in events if direction == "TX"],
+            [b"K1P1\r\n", b"K1P0\r\n"],
+        )
+        self.assertEqual(events[1], ("RX", b"OK\r\n"))
+        self.assertEqual(events[-1], ("RX", b"CH2\r\n"))
+        report_chunks = [payload for direction, payload in events[3:-1]]
+        self.assertEqual(len(report_chunks), 17)
+        self.assertEqual(b"".join(report_chunks).count(b"\r\n"), 19)
+        report_lines = [
+            "UDP2_14AP_U3 : Version_Number - 0009 - D1223",
+            "UDP2_14AP_DP : Version_Number - 0009 - D1223",
+            "CH-1",
+            "Hot KEY : CTRL",
+            "Buzzer : OFF",
+            "HUB1 : Sync",
+            "HUB2 : Sync",
+            "AUDIO : Sync",
+            "Mouse change channel : OFF",
+            "V1P0",
+            "V1P1",
+            *[f"K50_{index} FW Ver B1.42" for index in range(8)],
+        ]
+        report_state = {
+            "channel": "Channel 1",
+            "hotkey": "Ctrl",
+            "buzzer": False,
+            "hub1": "Sync",
+            "hub2": "Sync",
+            "audio": "Sync",
+            "mouse_change_channel": False,
+        }
+        final_state = report_state | {"channel": "Channel 2"}
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_writes = []
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            task = self.start_reader()
+            for index, (direction, payload) in enumerate(events):
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                    expected_writes.append(payload)
+                else:
+                    self.reader.feed_data(payload)
+                # Keep the recorded read boundaries without waiting for the
+                # original timestamps or inferring state from user actions.
+                await asyncio.sleep(0)
+                self.assertEqual(self.writer.writes, expected_writes)
+                if index <= 2:
+                    self.assertEqual(self.client.state, {})
+                    self.assertEqual(observed, [])
+                elif index == len(events) - 2:
+                    self.assertEqual(self.client.state, report_state)
+                elif index == len(events) - 1:
+                    self.assertEqual(self.client.state, final_state)
+
+        self.assertEqual(
+            [call.args[0] for call in parse.call_args_list],
+            ["OK", *report_lines, "CH2"],
+        )
+        self.assertEqual(len(observed), 8)
+        self.assertEqual(observed[0], {"channel": "Channel 1"})
+        self.assertEqual(observed[-2:], [report_state, final_state])
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, [b"K1P1\r\n", b"K1P0\r\n"])
+        self.opener.assert_awaited_once()
+
+        messages = [record.getMessage() for record in captured.records]
+        self.assertEqual(
+            [
+                message
+                for message in messages
+                if message.startswith(("TX /dev/test-kvm: ", "RX /dev/test-kvm: "))
+            ],
+            [
+                f"{direction} /dev/test-kvm: {payload!r}"
+                for direction, payload in events
+            ],
+        )
+        for line in ("OK", *report_lines[:2], "V1P0", "V1P1"):
+            self.assertIn(f"RX /dev/test-kvm unrecognized line: {line!r}", messages)
+        for index in range(8):
+            self.assertIn(
+                f"RX /dev/test-kvm ignored line: 'K50_{index} FW Ver B1.42'",
+                messages,
+            )
+
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
         complete = asyncio.Event()
