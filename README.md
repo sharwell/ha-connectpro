@@ -8,7 +8,7 @@ and iterative development.
 
 - HACS installable
 - Config flow stub for serial settings
-- Protocol docs placeholder: docs/commands.md
+- Partial serial protocol reference and automation mappings: docs/commands.md
 
 ## HACS installation (custom repo)
 
@@ -19,7 +19,8 @@ and iterative development.
 
 ## Development notes
 
-- The serial protocol reference will live in docs/commands.md.
+- The serial protocol reference and remaining information gaps are in
+  docs/commands.md.
 - Update `custom_components/connectpro/manifest.json` with your final
   documentation URL when the repo is published.
 
