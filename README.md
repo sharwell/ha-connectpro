@@ -6,9 +6,11 @@ configures the port when it connects, so a startup `stty` automation is no
 longer needed.
 
 This is an initial implementation based on the existing installation's
-commands and response mappings. It has not been verified against physical
-hardware. The [protocol reference](docs/commands.md) records the evidence
-and the features that still need confirmation from manuals or captures.
+commands and response mappings. A user-provided `K1P0` debug capture from
+physical hardware confirms a manual serial exchange with the integration.
+Channel and Reset actions, recovery, and other hardware configurations
+still need hardware verification. The [protocol reference](docs/commands.md)
+records the evidence and the features that still need confirmation.
 
 ## HACS installation (custom repo)
 
@@ -79,11 +81,14 @@ existing entities are preserved.
 The sensors describe observed state. Their corresponding controls are not
 exposed until the command meanings are confirmed. State remains unknown
 until the relevant feedback arrives; sending a command does not establish
-that it succeeded. An old email associates `K1P0` with a report containing
-all seven known state categories, but its purpose and possible setting
-changes remain unconfirmed. The integration therefore sends no automatic
-startup or status query. Entities become unavailable on a connection
-failure, and the integration retries the connection automatically.
+that it succeeded. An old email and a subsequent debug capture associate
+`K1P0` with a report containing all seven known state categories, but its
+purpose and possible setting changes remain unconfirmed. The capture
+includes the user's daisy-chain context; it does not establish how commands
+or responses are routed between linked devices. The integration therefore
+sends no automatic startup or status query. Entities become unavailable
+on a connection failure, and the integration retries the connection
+automatically.
 
 Each channel selection sends the requested command, even when the last
 reported channel matches. This keeps rapid requests, such as switching to
@@ -145,6 +150,11 @@ endings are visible. Unrecognized incoming messages are logged as well.
 A sent `Ch2` command is shown with its `\r\n` terminator; incoming data may
 arrive in more than one read. Logs describe what the integration writes
 and receives, not an independent electrical capture.
+
+The [captured `K1P0` exchange](docs/commands.md#debug-capture-after-k1p0)
+illustrates fragmented reads and trailing whitespace. The component version
+lines and `V1P0` / `V1P1` are logged as unrecognized because their meanings
+are not yet mapped to entities; this does not stop processing state feedback.
 
 For useful protocol evidence, capture a connection/startup followed by one
 action at a time, and note the KVM model, firmware version, and observed

@@ -10,12 +10,15 @@ far from the current Home Assistant setup:
 - The script with alias `KVM - request channel`
 - Dashboard channel buttons and the button labeled `Reset`
 - An email transcript of the output reported after sending `K1P0`
+- A debug log from manually sending `K1P0` through this integration on
+  2026-10-01, with the user's daisy-chain context
 
 These sources establish port configuration, outgoing command payloads,
 dashboard actions, and response-to-helper mappings. The email transcript
-also associates one response report with `K1P0`. It does not preserve raw
-bytes, timing, or serial terminators, and the meanings of every command
-are not yet established.
+associates one response report with `K1P0` without preserving raw bytes or
+timing. The subsequent debug log preserves sent and received bytes, read
+boundaries, and host log timestamps for another report. The meanings of
+every command are not yet established.
 
 The tables below preserve the original YAML setup as protocol evidence.
 The integration now implements the confirmed channel and Reset actions,
@@ -96,7 +99,9 @@ example, the action ending in `_ch1` writes `Ch1`, while `_v1p0` writes
 other capitalization.
 
 These are the intended write payloads. Raw captures would still be needed
-to verify bytes on the wire, including any terminal output processing.
+to verify the historical shell senders' bytes on the wire, including any
+terminal output processing. The later integration debug capture records
+the actual write passed to its serial transport as `b'K1P0\r\n'`.
 
 ## Command catalog
 
@@ -259,6 +264,70 @@ variant automatically on setup or reconnection. A manual or supervised
 before/after observations are needed to establish the command's effect
 before using it for automatic state discovery.
 
+### Debug capture after `K1P0`
+
+On 2026-10-01 the user manually sent `K1P0` through the integration's
+command action. The debug log records this write at `10:33:20.713`:
+
+```text
+TX: b'K1P0\r\n'
+```
+
+The response arrived in eight reads containing 19 CRLF-terminated lines.
+The [capture fixture](../tests/fixtures/k1p0_debug_capture.json) preserves
+each read's exact bytes and timestamp separately from the earlier email.
+The regression test replays these boundaries through the serial reader,
+including lines split across reads and multiple lines within one read.
+
+| RX timestamp | Elapsed from TX log timestamp |
+| --- | --- |
+| `10:33:20.721` | 8 ms |
+| `10:33:20.723` | 10 ms |
+| `10:33:20.726` | 13 ms |
+| `10:33:20.729` | 16 ms |
+| `10:33:20.735` | 22 ms |
+| `10:33:20.746` | 33 ms |
+| `10:33:20.752` | 39 ms |
+| `10:33:20.766` | 53 ms |
+
+These are host logging times for one exchange, without a timezone in the
+supplied log. They do not establish wire timing, a response timeout, or a
+marker for the end of a complete report. Read boundaries are transport
+chunks, not protocol message boundaries.
+
+After trimming outer whitespace, the lines have the same order and content
+as the email report except for these two state values:
+
+| State | Email report | Debug capture |
+| --- | --- | --- |
+| Channel | `CH-1` | `CH-2` |
+| Buzzer | `Buzzer : ON` | `Buzzer : OFF` |
+
+Both component version lines and all eight `K50_*` firmware lines contain
+one trailing space before CRLF in the debug capture. The integration keeps
+these bytes in its raw RX logs and strips outer whitespace for parsing.
+The seven observed state values are therefore `Channel 2`, `Ctrl`, buzzer
+off, mouse channel switching off, and `Sync` for both hubs and audio.
+
+The debug log labels the two component version lines and `V1P0` / `V1P1`
+as unrecognized, and all eight known firmware lines as ignored. These are
+expected classifications, not reader errors; subsequent feedback remains
+processable. The replay test verifies the seven state values, exact TX/RX
+bytes, normalized lines, and these log classifications.
+
+The user noted that daisy-chain linked devices, rather than one isolated
+device, might explain differences. The changed channel and buzzer values
+alone do not establish a daisy-chain effect. This capture does not identify
+which linked device emitted each line, how many devices responded, or how
+`K1P0` and `K1P1` through `K1P4` address or affect linked devices. Component
+identifiers and the eight firmware lines do not prove a device count.
+The integration currently exposes one device per serial connection; a
+chain-aware entity model requires evidence of routing and addressing.
+
+This capture confirms another report following uppercase `K1P0`, but does
+not record state before the command or establish that it is read-only.
+Lowercase equivalence and automatic state discovery remain unconfirmed.
+
 ## Dashboard and channel request behavior
 
 ### Channel buttons
@@ -316,8 +385,9 @@ punctuation. The automation itself does not trim whitespace or normalize
 case. The stock serial sensor strips leading and trailing whitespace
 before publishing its state, as described above. The configured sensor
 has no additional value template. These are processed sensor state
-strings; raw captures are still needed to establish the exact response
-terminators emitted by the device.
+strings. The later `K1P0` debug capture establishes CRLF response
+terminators for that exchange; framing for other commands and hardware
+configurations remains unverified.
 
 For select helpers, the automation calls `input_select.select_option` with
 the exact option shown below. For boolean helpers, it calls
@@ -404,9 +474,10 @@ The supplied configuration establishes these individual behaviors:
 
 These examples describe the supplied automation and script logic. The
 `K1P0` email report above provides one command-associated response
-sequence, but not raw byte framing, response timing, or before/after
-device state. The meaning of `K1P0`, acknowledgment rules, and the origin
-of messages outside that report remain unknown.
+sequence. The subsequent debug capture adds raw byte framing, read
+boundaries, and host log timing for another such report. Neither records
+before/after device state. The meaning of `K1P0`, acknowledgment rules,
+and response origins within a daisy chain remain unknown.
 
 ## Current integration behavior
 
@@ -456,7 +527,11 @@ To complete the reference, collect:
   whether uppercase and lowercase variants behave identically. A manual
   or before/after state observations should establish whether these
   commands change any configuration.
-- Raw command/response captures to supplement the email transcript,
-  including timing, startup/status behavior, and any audio/hub modes
-  beyond `Sync`, plus the retail KVM model and firmware version to identify
-  the scope of the observed behavior.
+- Before/after state observations and repeated captures with the chain
+  topology identified, or a comparison with an isolated device, to establish
+  command effects and the origin of responses. The existing `K1P0` debug
+  capture already preserves bytes, timing, and read boundaries for one
+  exchange.
+- Startup/status behavior and any audio/hub modes beyond `Sync`, plus the
+  retail KVM models and firmware versions to identify the scope of the
+  observed behavior.

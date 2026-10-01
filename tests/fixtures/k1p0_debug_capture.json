@@ -1,0 +1,47 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "context": {
+    "user_note": "If there are any differences from the above, it's possible that it's related to connecting the devices using a daisy-chain linked connections instead of communicating with one device in isolation.",
+    "interpretation": "The daisy-chain explanation is a user hypothesis; causation and comparison with an isolated device are unverified."
+  },
+  "tx": {
+    "time": "10:33:20.713",
+    "ascii": "K1P0\r\n"
+  },
+  "rx": [
+    {
+      "time": "10:33:20.721",
+      "ascii": "UDP2_14AP_U3 : Version_Number - 00"
+    },
+    {
+      "time": "10:33:20.723",
+      "ascii": "09 - D1223 \r\nUDP2_14AP_DP : Version_Number"
+    },
+    {
+      "time": "10:33:20.726",
+      "ascii": " - 0009 - D1223 \r\nCH"
+    },
+    {
+      "time": "10:33:20.729",
+      "ascii": "-2\r\nHot KEY : CT"
+    },
+    {
+      "time": "10:33:20.735",
+      "ascii": "RL\r\nBuzzer : OFF\r\nHUB1 : Sync\r\nHUB2 : Sync\r\n"
+    },
+    {
+      "time": "10:33:20.746",
+      "ascii": "AUDIO : Sync\r\nMouse change channel : OFF\r\nV1P0\r\nV1P1\r\nK50_0 FW Ver B1.42 \r\nK50_1 FW Ver B1.42 \r\nK50_2 FW Ver "
+    },
+    {
+      "time": "10:33:20.752",
+      "ascii": "B1.42 \r\nK50_3 FW Ver B1.42 \r\nK50_4 FW Ver B1.42 \r\nK50_5 FW Ver B1.42 \r\n"
+    },
+    {
+      "time": "10:33:20.766",
+      "ascii": "K50_6 FW Ver B1.42 \r\nK50_7 FW Ver B1.42 \r\n"
+    }
+  ]
+}

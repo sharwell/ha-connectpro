@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import sys
 import types
 import unittest
@@ -184,6 +185,97 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"unrecognized line: {line!r}", logs)
         for index in range(8):
             self.assertIn(f"ignored line: 'K50_{index} FW Ver B1.42'", logs)
+
+    async def test_k1p0_debug_capture_preserves_exact_read_boundaries(self) -> None:
+        """Replay the captured exchange, retaining padding, CRLFs, and read chunks."""
+        capture = json.loads(
+            (Path(__file__).parent / "fixtures" / "k1p0_debug_capture.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        tx = capture["tx"]["ascii"].encode("ascii")
+        chunks = [item["ascii"].encode("ascii") for item in capture["rx"]]
+        self.assertEqual(tx, b"K1P0\r\n")
+        self.assertEqual(len(chunks), 8)
+        self.assertEqual(b"".join(chunks).count(b"\r\n"), 19)
+        expected_lines = [
+            "UDP2_14AP_U3 : Version_Number - 0009 - D1223",
+            "UDP2_14AP_DP : Version_Number - 0009 - D1223",
+            "CH-2",
+            "Hot KEY : CTRL",
+            "Buzzer : OFF",
+            "HUB1 : Sync",
+            "HUB2 : Sync",
+            "AUDIO : Sync",
+            "Mouse change channel : OFF",
+            "V1P0",
+            "V1P1",
+            *[f"K50_{index} FW Ver B1.42" for index in range(8)],
+        ]
+        raw_lines = b"".join(chunks).split(b"\r\n")
+        self.assertEqual(raw_lines[-1], b"")
+        self.assertEqual(
+            [line for line in raw_lines if line.endswith(b" ")],
+            [
+                line.encode("ascii") + b" "
+                for line in (*expected_lines[:2], *expected_lines[11:])
+            ],
+        )
+        await self.client.async_connect()
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            task = self.start_reader()
+            self.assertEqual(self.writer.writes, [])
+            await self.client.async_send_command("K1P0")
+            self.assertEqual(self.writer.writes, [tx])
+            for chunk in chunks:
+                self.reader.feed_data(chunk)
+                # Preserve the captured boundaries rather than coalescing
+                # queued data into a single StreamReader.read() result.
+                await asyncio.sleep(0)
+
+        self.assertEqual(
+            [call.args[0] for call in parse.call_args_list], expected_lines
+        )
+        self.assertEqual(
+            self.client.state,
+            {
+                "channel": "Channel 2",
+                "hotkey": "Ctrl",
+                "buzzer": False,
+                "hub1": "Sync",
+                "hub2": "Sync",
+                "audio": "Sync",
+                "mouse_change_channel": False,
+            },
+        )
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, [tx])
+        self.opener.assert_awaited_once()
+
+        messages = [record.getMessage() for record in captured.records]
+        self.assertIn(f"TX /dev/test-kvm: {tx!r}", messages)
+        self.assertEqual(
+            [
+                message
+                for message in messages
+                if message.startswith("RX /dev/test-kvm: ")
+            ],
+            [f"RX /dev/test-kvm: {chunk!r}" for chunk in chunks],
+        )
+        for line in (*expected_lines[:2], "V1P0", "V1P1"):
+            self.assertIn(f"RX /dev/test-kvm unrecognized line: {line!r}", messages)
+        for index in range(8):
+            self.assertIn(
+                f"RX /dev/test-kvm ignored line: 'K50_{index} FW Ver B1.42'",
+                messages,
+            )
 
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
