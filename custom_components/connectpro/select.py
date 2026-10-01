@@ -1,4 +1,4 @@
-"""Channel and hotkey selection for ConnectPro KVM devices."""
+"""Channel, hotkey, and automatic scan selection for ConnectPro KVM devices."""
 
 from __future__ import annotations
 
@@ -23,6 +23,14 @@ HOTKEY_COMMANDS = {
     "Scroll Lock": "scroll",
     "Caps Lock": "caps",
 }
+AUTO_SCAN_COMMANDS = {
+    "Off": "s0",
+    "5 seconds": "s1",
+    "8 seconds": "s2",
+    "15 seconds": "s3",
+    "20 seconds": "s4",
+    "30 seconds": "s5",
+}
 
 
 async def async_setup_entry(
@@ -30,8 +38,14 @@ async def async_setup_entry(
     entry: ConnectProConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the KVM channel and hotkey selectors."""
-    async_add_entities([ConnectProChannelSelect(entry), ConnectProHotkeySelect(entry)])
+    """Set up the KVM channel, hotkey, and automatic scan selectors."""
+    async_add_entities(
+        [
+            ConnectProChannelSelect(entry),
+            ConnectProHotkeySelect(entry),
+            ConnectProAutoScanSelect(entry),
+        ]
+    )
 
 
 class ConnectProChannelSelect(ConnectProEntity, SelectEntity):
@@ -76,3 +90,39 @@ class ConnectProHotkeySelect(ConnectProEntity, SelectEntity):
         if option not in HOTKEY_COMMANDS:
             raise ServiceValidationError(f"Unsupported ConnectPro hotkey: {option}")
         await self._async_send_command(HOTKEY_COMMANDS[option])
+
+
+class ConnectProAutoScanSelect(ConnectProEntity, SelectEntity):
+    """Select automatic scanning from separately reported on/off and timing state."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(self, entry: ConnectProConfigEntry) -> None:
+        """Initialize the automatic scan selector."""
+        super().__init__(entry, "auto_scan")
+        self._attr_options = list(AUTO_SCAN_COMMANDS)
+
+    @property
+    def current_option(self) -> str | None:
+        """Return Off or the last reported interval only when scan state is known."""
+        enabled = self._client.state.get(self._state_key)
+        if enabled is False:
+            return "Off"
+        interval = self._client.state.get("auto_scan_interval")
+        if (
+            enabled is True
+            and isinstance(interval, str)
+            and interval != "Off"
+            and interval in AUTO_SCAN_COMMANDS
+        ):
+            return interval
+        return None
+
+    async def async_select_option(self, option: str) -> None:
+        """Request a tested scan setting without assuming the command succeeded."""
+        if option not in AUTO_SCAN_COMMANDS:
+            raise ServiceValidationError(
+                f"Unsupported ConnectPro scan setting: {option}"
+            )
+        await self._async_send_command(AUTO_SCAN_COMMANDS[option])

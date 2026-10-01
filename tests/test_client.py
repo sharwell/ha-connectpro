@@ -1101,6 +1101,286 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             [f"RX {path} unrecognized line: 'ERROR'"],
         )
 
+    async def test_uart_capture_preserves_diagnostics_and_connection(self) -> None:
+        """UART replies retain exact framing but do not invent observed state."""
+        capture = json.loads(
+            (Path(__file__).parent / "fixtures" / "uart_debug_capture.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        expected_commands = [
+            b"v1p0\r\n",
+            b"v3p0\r\n",
+            b"u1\r\n",
+            b"u0\r\n",
+            b"u2\r\n",
+            b"u0\r\n",
+        ]
+        version = "UDP2_14AP_DP : Version_Number - 0009 - D1223"
+        expected_lines = [
+            "Video1 : SYNC-mode",
+            "ERROR",
+            "UART to DP1-Board",
+            version,
+            "UART connect to USB-Board",
+            "Ready-0",
+            "UART to DP2-Board",
+            version,
+            "UART connect to USB-Board",
+            version,
+            "Ready-0",
+        ]
+        self.assertEqual(len(events), 35)
+        self.assertEqual(sum(direction == "RX" for direction, _ in events), 29)
+        self.assertEqual(
+            sum(len(payload) for direction, payload in events if direction == "RX"),
+            290,
+        )
+        self.assertEqual(
+            [payload for direction, payload in events if direction == "TX"],
+            expected_commands,
+        )
+        self.client = ConnectProClient(SerialSettings(capture["device"]))
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_writes = []
+        received = bytearray()
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            task = self.start_reader(initialize_state=False)
+            for direction, payload in events:
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                    expected_writes.append(payload)
+                else:
+                    self.reader.feed_data(payload)
+                    received.extend(payload)
+                await asyncio.sleep(0)
+                # The version reply is complete at CR, before its later LF read.
+                complete_lines = [
+                    line.decode("ascii").strip()
+                    for line in bytes(received).replace(b"\r", b"\n").split(b"\n")[:-1]
+                    if line
+                ]
+                self.assertEqual(complete_lines, expected_lines[: len(complete_lines)])
+                self.assertEqual(
+                    [call.args[0] for call in parse.call_args_list], complete_lines
+                )
+                self.assertEqual(
+                    self.client.state, {"video1": "Sync"} if complete_lines else {}
+                )
+                self.assertEqual(len(observed), int(bool(complete_lines)))
+                self.assertEqual(self.writer.writes, expected_writes)
+
+        self.assertEqual(parse.call_count, 11)
+        self.assertEqual(observed, [{"video1": "Sync"}])
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, expected_commands)
+        self.opener.assert_awaited_once()
+        messages = [record.getMessage() for record in captured.records]
+        path = capture["device"]
+        self.assertEqual(
+            [
+                message
+                for message in messages
+                if message.startswith((f"TX {path}: ", f"RX {path}: "))
+            ],
+            [f"{direction} {path}: {payload!r}" for direction, payload in events],
+        )
+        self.assertEqual(
+            [message for message in messages if "unrecognized line" in message],
+            [f"RX {path} unrecognized line: {line!r}" for line in expected_lines[1:]],
+        )
+        self.assertEqual(len(messages), len(events) + 10)
+
+    async def test_audio_scan_capture_waits_for_each_complete_report(self) -> None:
+        """Retain scan timing separately from enabled state and channel feedback."""
+        capture = json.loads(
+            (
+                Path(__file__).parent / "fixtures" / "audio_scan_debug_capture.json"
+            ).read_text(encoding="utf-8")
+        )
+        events = [
+            (event["time"], event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        expected_commands = [
+            b"o1\r\n",
+            b"o0\r\n",
+            b"s1\r\n",
+            b"s0\r\n",
+            b"s2\r\n",
+            b"s0\r\n",
+            b"s3\r\n",
+            b"s0\r\n",
+            b"s4\r\n",
+            b"s5\r\n",
+            b"s0\r\n",
+        ]
+        expected_reports = [
+            ("AUDIO : CHANNEL1", {"audio": "Channel 1"}),
+            ("AUDIO : Sync", {"audio": "Sync"}),
+            ("Auto Scan : ON", {"auto_scan": True}),
+            ("Auto Scan : 1(5sec)", {"auto_scan_interval": "5 seconds"}),
+            ("CH3", {"channel": "Channel 3"}),
+            ("CH4", {"channel": "Channel 4"}),
+            ("CH1", {"channel": "Channel 1"}),
+            ("CH2", {"channel": "Channel 2"}),
+            ("CH3", {"channel": "Channel 3"}),
+            ("CH4", {"channel": "Channel 4"}),
+            ("CH1", {"channel": "Channel 1"}),
+            ("CH2", {"channel": "Channel 2"}),
+            ("CH2", {"channel": "Channel 2"}),
+            ("Auto Scan : OFF", {"auto_scan": False}),
+            ("Auto Scan : ON", {"auto_scan": True}),
+            ("Auto Scan : 2(8Sec)", {"auto_scan_interval": "8 seconds"}),
+            ("Auto Scan : OFF", {"auto_scan": False}),
+            ("Auto Scan : ON", {"auto_scan": True}),
+            ("Auto Scan : 3(15Sec)", {"auto_scan_interval": "15 seconds"}),
+            ("Auto Scan : OFF", {"auto_scan": False}),
+            ("Auto Scan : ON", {"auto_scan": True}),
+            ("Auto Scan : 4(20Sec)", {"auto_scan_interval": "20 seconds"}),
+            ("Auto Scan : ON", {"auto_scan": True}),
+            ("Auto Scan : 5(30Sec)", {"auto_scan_interval": "30 seconds"}),
+            ("Auto Scan : OFF", {"auto_scan": False}),
+        ]
+        states_by_complete_lines = [{}]
+        for _, update in expected_reports:
+            states_by_complete_lines.append(states_by_complete_lines[-1] | update)
+        update_counts_by_complete_lines = [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            21,
+            22,
+            23,
+        ]
+        self.assertEqual(len(events), 58)
+        self.assertEqual(sum(direction == "RX" for _, direction, _ in events), 47)
+        self.assertEqual(
+            sum(len(payload) for _, direction, payload in events if direction == "RX"),
+            333,
+        )
+        self.assertEqual(
+            [payload for _, direction, payload in events if direction == "TX"],
+            expected_commands,
+        )
+        self.client = ConnectProClient(SerialSettings(capture["device"]))
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_writes = []
+        received = bytearray()
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            task = self.start_reader(initialize_state=False)
+            for timestamp, direction, payload in events:
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                    expected_writes.append(payload)
+                else:
+                    self.reader.feed_data(payload)
+                    received.extend(payload)
+                await asyncio.sleep(0)
+                complete_lines = received.count(b"\r\n")
+                self.assertEqual(
+                    [call.args[0] for call in parse.call_args_list],
+                    [line for line, _ in expected_reports[:complete_lines]],
+                )
+                self.assertEqual(
+                    self.client.state, states_by_complete_lines[complete_lines]
+                )
+                self.assertEqual(
+                    len(observed), update_counts_by_complete_lines[complete_lines]
+                )
+                self.assertEqual(self.writer.writes, expected_writes)
+                if timestamp == "12:31:40.654":
+                    # The physical button gave CH2, without an OFF report.
+                    self.assertIs(self.client.state["auto_scan"], True)
+                    self.assertEqual(
+                        self.client.state["auto_scan_interval"], "5 seconds"
+                    )
+
+        self.assertEqual(parse.call_count, 25)
+        self.assertEqual(len(observed), 23)
+        self.assertEqual(
+            self.client.state,
+            {
+                "audio": "Sync",
+                "auto_scan": False,
+                "auto_scan_interval": "30 seconds",
+                "channel": "Channel 2",
+            },
+        )
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, expected_commands)
+        self.opener.assert_awaited_once()
+        self.assertEqual(
+            [record.getMessage() for record in captured.records],
+            [
+                f"{direction} {capture['device']}: {payload!r}"
+                for _, direction, payload in events
+            ],
+        )
+
+    async def test_scan_interval_feedback_does_not_imply_scan_enabled(self) -> None:
+        """Simulated standalone timing replies leave on/off feedback independent."""
+        await self.client.async_connect()
+        task = self.start_reader(initialize_state=False)
+        self.reader.feed_data(b"Auto Scan : 2(8Sec)\r\n")
+        await asyncio.sleep(0)
+        self.assertEqual(self.client.state, {"auto_scan_interval": "8 seconds"})
+        self.reader.feed_data(b"Auto Scan : OFF\r\nAuto Scan : 5(30Sec)\r\n")
+        await asyncio.sleep(0)
+        self.assertEqual(
+            self.client.state,
+            {"auto_scan": False, "auto_scan_interval": "30 seconds"},
+        )
+        self.assertEqual(self.writer.writes, [])
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
         complete = asyncio.Event()

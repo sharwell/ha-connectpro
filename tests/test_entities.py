@@ -25,6 +25,7 @@ from custom_components.connectpro.button import (
 from custom_components.connectpro.const import DOMAIN
 from custom_components.connectpro.entity import ConnectProEntity
 from custom_components.connectpro.select import (
+    ConnectProAutoScanSelect,
     ConnectProChannelSelect,
     ConnectProHotkeySelect,
 )
@@ -205,7 +206,11 @@ def test_hotkey_unrecognized_state_remains_unknown(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("entity_type", "option"),
-    [(ConnectProChannelSelect, "Channel 3"), (ConnectProHotkeySelect, "Shift")],
+    [
+        (ConnectProChannelSelect, "Channel 3"),
+        (ConnectProHotkeySelect, "Shift"),
+        (ConnectProAutoScanSelect, "8 seconds"),
+    ],
 )
 @pytest.mark.parametrize(
     ("error", "expected_type"),
@@ -237,6 +242,97 @@ async def test_command_errors_are_exposed_as_home_assistant_errors(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("option", "command"),
+    [
+        ("Off", "s0"),
+        ("5 seconds", "s1"),
+        ("8 seconds", "s2"),
+        ("15 seconds", "s3"),
+        ("20 seconds", "s4"),
+        ("30 seconds", "s5"),
+    ],
+)
+async def test_auto_scan_sends_tested_commands_and_waits_for_feedback(
+    entry: SimpleNamespace, client: FakeClient, option: str, command: str
+) -> None:
+    """Every valid selection sends its exact command without optimistic state."""
+    client.state.update({"auto_scan": True, "auto_scan_interval": "5 seconds"})
+    entity = ConnectProAutoScanSelect(entry)
+    assert entity.options == [
+        "Off",
+        "5 seconds",
+        "8 seconds",
+        "15 seconds",
+        "20 seconds",
+        "30 seconds",
+    ]
+    before = client.state.copy()
+
+    await entity.async_select_option(option)
+
+    assert client.commands == [command]
+    assert client.state == before
+    assert entity.current_option == "5 seconds"
+    client.state["auto_scan"] = option != "Off"
+    if option != "Off":
+        client.state["auto_scan_interval"] = option
+    assert entity.current_option == option
+
+
+@pytest.mark.parametrize(
+    ("observed_state", "expected"),
+    [
+        ({}, None),
+        ({"auto_scan": True}, None),
+        ({"auto_scan_interval": "5 seconds"}, None),
+        ({"auto_scan": False, "auto_scan_interval": "8 seconds"}, "Off"),
+        ({"auto_scan": True, "auto_scan_interval": "15 seconds"}, "15 seconds"),
+        ({"auto_scan": True, "auto_scan_interval": "Off"}, None),
+        ({"auto_scan": True, "auto_scan_interval": "1 minute"}, None),
+    ],
+)
+def test_auto_scan_requires_explicit_scan_state_and_recognized_timing(
+    entry: SimpleNamespace,
+    client: FakeClient,
+    observed_state: dict[str, str | bool],
+    expected: str | None,
+) -> None:
+    """Partial feedback remains unknown; explicit Off overrides cached timing."""
+    client.state.update(observed_state)
+    assert ConnectProAutoScanSelect(entry).current_option == expected
+    assert client.commands == []
+
+
+@pytest.mark.asyncio
+async def test_auto_scan_change_back_before_feedback_is_not_dropped(
+    entry: SimpleNamespace, client: FakeClient
+) -> None:
+    """A stale reported interval never suppresses the latest request."""
+    client.state.update({"auto_scan": True, "auto_scan_interval": "5 seconds"})
+    entity = ConnectProAutoScanSelect(entry)
+
+    await entity.async_select_option("8 seconds")
+    await entity.async_select_option("5 seconds")
+
+    assert client.commands == ["s2", "s1"]
+    assert entity.current_option == "5 seconds"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", ["On", "off", "5", "6 seconds", ""])
+async def test_auto_scan_rejects_unconfirmed_options(
+    entry: SimpleNamespace, client: FakeClient, option: str
+) -> None:
+    """Invalid names cannot produce guessed timing commands."""
+    with pytest.raises(
+        ServiceValidationError, match="Unsupported ConnectPro scan setting"
+    ):
+        await ConnectProAutoScanSelect(entry).async_select_option(option)
+    assert client.commands == []
+
+
+@pytest.mark.asyncio
 async def test_reset_button_sends_exact_command(
     entry: SimpleNamespace, client: FakeClient
 ) -> None:
@@ -254,6 +350,7 @@ async def test_reset_button_sends_exact_command(
 @pytest.mark.parametrize(
     ("key", "command"),
     [
+        ("sync_audio", "o0"),
         ("sync_usb_hubs", "h0p0"),
         ("sync_video1", "v1p0"),
         ("sync_video_outputs", "v0p0"),
@@ -269,7 +366,12 @@ async def test_routing_sync_buttons_send_exact_scoped_command_without_state_chan
     """Each button sends only its tested command, preserving unknown/observed state."""
     if has_observed_state:
         client.state.update(
-            {"hub1": "Channel 2", "hub2": "Sync", "video1": "Channel 2"}
+            {
+                "audio": "Channel 1",
+                "hub1": "Channel 2",
+                "hub2": "Sync",
+                "video1": "Channel 2",
+            }
         )
     before = client.state.copy()
     entity = ConnectProRoutingSyncButton(entry, key)
@@ -286,7 +388,9 @@ async def test_routing_sync_buttons_send_exact_scoped_command_without_state_chan
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", ["sync_usb_hubs", "sync_video1", "sync_video_outputs"])
+@pytest.mark.parametrize(
+    "key", ["sync_audio", "sync_usb_hubs", "sync_video1", "sync_video_outputs"]
+)
 @pytest.mark.parametrize(
     ("error", "expected_type"),
     [
@@ -304,7 +408,14 @@ async def test_routing_sync_failure_surfaces_without_changing_state(
     expected_type: type[HomeAssistantError],
 ) -> None:
     """A failed sync action preserves every routing observation."""
-    client.state.update({"hub1": "Channel 2", "hub2": "Sync", "video1": "Channel 2"})
+    client.state.update(
+        {
+            "audio": "Channel 1",
+            "hub1": "Channel 2",
+            "hub2": "Sync",
+            "video1": "Channel 2",
+        }
+    )
     before = client.state.copy()
     client.send_error = error
 
@@ -406,6 +517,7 @@ async def test_switch_surfaces_command_failures_without_changing_state(
 @pytest.mark.parametrize(
     ("entity_type", "key"),
     [
+        (ConnectProAutoScanSelect, "auto_scan"),
         (ConnectProHotkeySelect, "hotkey"),
         (ConnectProBuzzerSwitch, "buzzer"),
         (ConnectProMouseChannelSwitch, "mouse_change_channel"),
@@ -442,6 +554,7 @@ async def test_mouse_switch_change_back_before_feedback_is_not_dropped(
     ("key", "value"),
     [
         ("audio", "Sync"),
+        ("audio", "Channel 1"),
         ("hub1", "Sync"),
         ("hub1", "Channel 2"),
         ("hub2", "Sync"),
@@ -480,9 +593,10 @@ async def test_platforms_share_device_identity_and_connection_availability(
         )
 
     expected_keys = {
-        Platform.SELECT: {"channel", "hotkey"},
+        Platform.SELECT: {"channel", "hotkey", "auto_scan"},
         Platform.BUTTON: {
             "reset",
+            "sync_audio",
             "sync_usb_hubs",
             "sync_video1",
             "sync_video_outputs",
@@ -506,7 +620,7 @@ async def test_platforms_share_device_identity_and_connection_availability(
         for platform_entities in entities_by_platform.values()
         for entity in platform_entities
     ]
-    assert len(entities) == 12
+    assert len(entities) == 14
     for entity in entities:
         assert entity.has_entity_name is True
         assert entity.should_poll is False
@@ -537,6 +651,7 @@ def test_device_name_falls_back_when_entry_title_is_empty(
     [
         (ConnectProChannelSelect, "select.connectpro_channel"),
         (ConnectProHotkeySelect, "select.connectpro_hotkey"),
+        (ConnectProAutoScanSelect, "select.connectpro_auto_scan"),
         (ConnectProBuzzerSwitch, "switch.connectpro_buzzer"),
         (ConnectProMouseChannelSwitch, "switch.connectpro_mouse_channel_switching"),
         (
@@ -566,6 +681,8 @@ async def test_entity_listener_updates_state_and_unsubscribes_on_removal(
             {
                 "channel": "Channel 3",
                 "hotkey": "Shift",
+                "auto_scan": True,
+                "auto_scan_interval": "8 seconds",
                 "buzzer": True,
                 "mouse_change_channel": True,
                 "video1": "Channel 2",

@@ -33,6 +33,12 @@ far from the current Home Assistant setup:
   assigned to machine 2 on both linked KVMs independently of the channel,
   followed by physical confirmation of Video 1's fixed routing across both
   units and its independent return to Sync
+- Captured lowercase UART board-selection commands and a rejected `v3p0`
+  on 2026-10-01, including component version and `Ready-0` diagnostics
+- Captured lowercase audio and auto-scan commands on 2026-10-01, with all
+  five scan interval replies and 5-second channel cycling; the user
+  subsequently verified audio fixed/following behavior and the effect of
+  both audio routing and auto-scan on both linked KVMs
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -46,11 +52,12 @@ yet established.
 
 The tables below preserve the original YAML setup as protocol evidence.
 The integration now implements channel and hotkey selection, buzzer and
-mouse channel-switching controls, the `W0` display action, and USB/video
-Sync actions. It receives the listed state feedback into native entities
-and offers a generic command action. See the [README](../README.md) for
-installation, migration, and logging instructions. The old helpers and shell actions are
-not required by the integration.
+mouse channel-switching controls, auto-scan selection, the `W0` display
+action, and USB/video/audio Sync actions. It receives the listed state
+feedback into native entities and offers a generic command action. See
+the [README](../README.md) for installation, migration, and logging
+instructions. The old helpers and shell actions are not required by the
+integration.
 
 ## Serial settings
 
@@ -223,9 +230,12 @@ receiving `BZOFF`. The lowercase `bzoff` sender remains untested in these
 captures. The hotkey and mouse capture below establishes command-associated
 feedback for `ctrl`, `shift`, `scroll`, `caps`, and both cases of `M0` /
 `M1`. The routing capture below establishes replies for lowercase `h1p2`,
-`h0p0`, `v1p2`, `v0p0`, and `v1p0`, and rejection of `h1p0`. Other command
-meanings remain unconfirmed on this hardware; names alone do not prove a
-mapping to audio or other features.
+`h0p0`, `v1p2`, `v0p0`, and `v1p0`, and rejection of `h1p0`. Subsequent
+captures below establish lowercase `o1` / `o0` audio routing replies,
+`s0` through `s5` auto-scan settings, and `u0` / `u1` / `u2` UART
+board-selection replies. Uppercase `O`, `S`, and `U` payloads in the
+original inventory are not separately verified by these lowercase tests.
+Other command meanings remain unconfirmed on this hardware.
 
 ### Report observed after `K1P0`
 
@@ -668,6 +678,122 @@ There are five state-change notifications; `ERROR` remains a debug
 diagnostic without changing state or closing the connection. No write
 alone establishes a state change, and no additional commands are sent.
 
+### Debug capture after UART board-selection commands
+
+The user supplied the following sequence on 2026-10-01. The
+[capture fixture](../tests/fixtures/uart_debug_capture.json) preserves
+all 35 ordered events (six writes and 29 reads), including leading/trailing
+spaces and standalone CR/LF reads. The leading `v1p0` exchange repeats
+the same timestamped exchange in the previous routing capture; it is not
+evidence of a second independent test.
+
+| Command | TX timestamp | Normalized reply lines |
+| --- | --- | --- |
+| `v1p0` | `12:20:12.449` | `Video1 : SYNC-mode` |
+| `v3p0` | `12:21:08.137` | `ERROR` |
+| `u1` | `12:27:45.495` | `UART to DP1-Board`; `UDP2_14AP_DP : Version_Number - 0009 - D1223` |
+| `u0` | `12:28:06.651` | `UART connect to USB-Board`; `Ready-0` |
+| `u2` | `12:29:42.197` | `UART to DP2-Board`; `UDP2_14AP_DP : Version_Number - 0009 - D1223` |
+| `u0` | `12:29:46.437` | `UART connect to USB-Board`; `UDP2_14AP_DP : Version_Number - 0009 - D1223`; `Ready-0` |
+
+The wording suggests selecting an internal board's UART command path:
+`u1` reports DP1, `u2` reports DP2, and `u0` reports USB. This is an
+inference from the replies; the capture does not establish what later
+commands do on each path. DP1/DP2 board labels must not be equated with
+the first/second daisy-chained KVM without additional evidence. These
+commands are also distinct from the USB hub's computer routing commands.
+
+Both DP selections return the same component-version text. That text
+also appears after the second USB return, so timing alone does not
+establish which board originated a version line or whether it describes
+the newly selected board. `Ready-0` follows both returns, but its exact
+meaning is unknown. Neither diagnostic is treated as a required startup
+handshake, a confirmation of channel state, or a trigger for reconnection.
+The integration does not send `u0` automatically.
+
+The eleven normalized lines include one recognized Video 1 Sync reply
+and ten diagnostics. The normalized UART, version, `Ready-0`, and `ERROR`
+lines remain debug diagnostics without entity updates. The initial `Video1 : SYNC-mode`
+updates Video 1 through the existing parser. `v3p0` returned `ERROR`;
+this rejects that exact lowercase command in the tested setup, without
+establishing a general maximum output count or proving that all related
+commands are invalid.
+
+For `u1`, the version line ends with CR in the read at `12:27:45.626`,
+and LF arrives separately at `12:27:45.628`. Other reads contain CRLF
+followed by an extra CR. Existing line framing and outer-whitespace
+trimming handle these forms without treating fragments or blank lines as
+state. Replay coverage preserves those boundaries, checks raw logging,
+and verifies that diagnostic replies do not close the serial connection
+or cause additional writes.
+
+### Debug capture after audio and auto-scan commands
+
+On 2026-10-01 the user tested audio routing and all five scan settings.
+The [capture fixture](../tests/fixtures/audio_scan_debug_capture.json)
+preserves all 58 ordered events (eleven writes and 47 reads), with the
+exact lowercase writes, fragmented reads, and host times.
+
+| Command | TX timestamp | Complete reply lines |
+| --- | --- | --- |
+| `o1` | `12:30:25.726` | `AUDIO : CHANNEL1` |
+| `o0` | `12:30:35.452` | `AUDIO : Sync` |
+| `s1` | `12:30:57.101` | `Auto Scan : ON`; `Auto Scan : 1(5sec)` |
+| `s0` | `12:32:31.166` | `Auto Scan : OFF` |
+| `s2` | `12:33:02.374` | `Auto Scan : ON`; `Auto Scan : 2(8Sec)` |
+| `s0` | `12:33:06.892` | `Auto Scan : OFF` |
+| `s3` | `12:33:12.621` | `Auto Scan : ON`; `Auto Scan : 3(15Sec)` |
+| `s0` | `12:33:16.075` | `Auto Scan : OFF` |
+| `s4` | `12:33:20.458` | `Auto Scan : ON`; `Auto Scan : 4(20Sec)` |
+| `s5` | `12:33:23.871` | `Auto Scan : ON`; `Auto Scan : 5(30Sec)` |
+| `s0` | `12:33:27.293` | `Auto Scan : OFF` |
+
+The user subsequently verified `o1` routing audio from machine 1 and
+`o0` restoring audio following the selected channel. Audio routing and
+auto-scan affect both linked KVMs in this installation. The log does not
+identify which unit originated each serial reply. The Audio routing
+sensor now maps `AUDIO : CHANNEL1` to `Channel 1`, alongside the existing
+`Sync` mapping. **Sync audio** sends the tested lowercase `o0`; the manual
+command action can send `o1`. Other fixed audio destinations still need
+captured replies before a complete audio selector is introduced.
+
+Every nonzero scan command reports ON followed by its interval; it starts
+scanning rather than merely storing a duration. The native **Auto scan**
+selector exposes `Off` (`s0`), `5 seconds` (`s1`), `8 seconds` (`s2`),
+`15 seconds` (`s3`), `20 seconds` (`s4`), and `30 seconds` (`s5`). These
+labels come from the exact reported intervals, including the different
+`sec` / `Sec` spellings. Other spellings or interval combinations are not
+accepted as state without further evidence.
+
+After `s1`, channel feedback runs through `CH3`, `CH4`, `CH1`, `CH2`
+twice from `12:31:02.107` through `12:31:37.171`, about five seconds
+apart. The user reported scanning disrupting inputs faster than the
+monitors could adjust and manually pressed a button to return to channel
+2. The extra `CH2` at `12:31:40.654` does not include `Auto Scan : OFF`.
+The integration therefore preserves the last explicitly reported scan
+setting until `s0` produces OFF at `12:32:31.190`. The capture does not
+measure channel dwell times for the other four intervals; those durations
+are established by their interval replies.
+
+Scan enabled state and the last reported interval are stored separately.
+OFF makes the selector show `Off` regardless of an earlier interval.
+ON with no recognized interval, or an interval with no enabled-state
+report, leaves it unknown. While ON, it displays the last reported
+interval until a newer interval arrives. This includes the direct
+`s4` to `s5` change, whose repeated ON reply does not itself establish
+the new duration. Selecting any valid option always sends its command;
+the selection does not optimistically change state or suppress a request
+that matches stale feedback. Channel reports only update channel state.
+
+The captured `k1p0` reports do not include scan enabled state or interval,
+so those values remain unknown after initialization until explicit scan
+feedback arrives. No scan command is sent automatically, and no separate
+scan compatibility sensor is created. The replay verifies all 25 complete
+lines, framing, feedback-only state changes, duplicate suppression, and
+continued connection across the entire sequence. The duplicate manual
+`CH2` and the repeated ON during the direct interval change produce no
+additional state notification.
+
 ### Automatic state initialization
 
 The user confirmed that lowercase `k1p0` can obtain current state for the
@@ -759,16 +885,18 @@ case. The stock serial sensor strips leading and trailing whitespace
 before publishing its state, as described above. The configured sensor
 has no additional value template. These are processed sensor state
 strings. The later debug captures establish CRLF response terminators for
-the supplied status, targeted-channel, display, buzzer, hotkey, mouse, and
-routing exchanges; framing for other commands and hardware configurations
-remains unverified.
+the supplied status, targeted-channel, display, buzzer, hotkey, mouse,
+routing, and scan exchanges. The UART capture also includes split CR/LF
+terminators and extra CRs; framing for other commands and hardware
+configurations remains unverified.
 
 For select helpers, the automation calls `input_select.select_option` with
 the exact option shown below. For boolean helpers, it calls
 `input_boolean.turn_on` or `input_boolean.turn_off` as indicated. These
 helpers belong to the original hand-rolled setup. The integration exposes
-native channel and hotkey selectors, buzzer and mouse channel-switching
-switches, and sensors for audio/hub modes instead of writing these helpers.
+native channel, hotkey, and auto-scan selectors, buzzer and mouse
+channel-switching switches, and sensors for audio/hub/video routing instead
+of writing these helpers. Additional buttons request the tested Sync actions.
 The earlier read-only hotkey, buzzer, and mouse entities are removed during
 prerelease development; each control also reports its observed state.
 
@@ -897,10 +1025,24 @@ outputs. Only recognized replies update routing state. No button sends
 the rejected `h1p0`, and the global video Sync reply updates only the
 confirmed Video 1 state rather than creating untested video entities.
 
+Audio also recognizes the tested `Channel 1` reply. **Sync audio** sends
+`o0`, alongside the audio routing sensor; fixed `o1` routing remains
+available through the manual command action. This stateless button does
+not replace a stateful setting, so the sensor remains the current-state
+entity rather than a compatibility copy.
+
+The Auto scan selector sends `s0` through `s5` for Off or one of the five
+reported durations. Every duration selection starts scanning. Only
+explicit scan and interval replies establish its state; channel changes
+do not establish that scanning stopped. UART board-selection replies,
+version text, `Ready-0`, and command errors remain diagnostics through
+normal debug logging. The integration does not create UART controls or
+automatically select a board.
+
 Every valid channel selection sends a command, including a selection
 that matches the last observed channel. Unlike the old script's guard,
 this allows a quick change and change back before the first response
-arrives. Audio routing and additional hub/video combinations remain
+arrives. Additional audio destinations and hub/video combinations remain
 unconfirmed. Their payloads stay in the command catalog for further
 verification. The `connectpro.send_command` action accepts a ConnectPro
 `device_id` and a single printable ASCII command line under `data`, and
@@ -968,7 +1110,15 @@ To complete the reference, collect:
   machine 2, both-hub Sync, and individual/global video Sync are recorded
   above. Whether an independent hub Sync command exists remains open;
   `h1p0` is rejected in this installation.
-- Audio routing beyond `Sync`, video routing in status reports, and the
-  retail KVM models and firmware versions to identify the scope of the
-  observed behavior. Bare `V1P0` / `V1P1` report tokens do not yet provide
+- Audio destinations beyond the tested Channel 1, video routing in status
+  reports, and the retail KVM models and firmware versions to identify
+  the scope of the observed behavior. Bare `V1P0` / `V1P1` report tokens do not yet provide
   video state.
+- The effect of UART board selection on later commands and its scope
+  across the chain. `u0` / `u1` / `u2` replies and `Ready-0` diagnostics
+  are recorded, but board labels and reply timing do not establish chain
+  addresses or a required initialization/recovery sequence.
+- Scan behavior after manual channel selection, actual dwell times for
+  the other four intervals, and whether scan settings appear in a status
+  report. The user verified scan operation on both linked KVMs; only the
+  5-second channel cycle is captured here.

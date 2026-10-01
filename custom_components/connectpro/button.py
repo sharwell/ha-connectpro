@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from . import ConnectProConfigEntry
 
 SYNC_COMMANDS = {
+    "sync_audio": "o0",
     "sync_usb_hubs": "h0p0",
     "sync_video1": "v1p0",
     "sync_video_outputs": "v0p0",

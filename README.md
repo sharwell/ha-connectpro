@@ -8,9 +8,9 @@ longer needed.
 This is an initial implementation based on the existing installation's
 commands and response mappings. User-provided captures from physical
 hardware confirm manual status, targeted channel, hotkey, buzzer, mouse
-channel-switching, USB/video routing, and `W0` exchanges through the
-integration. The user observed `W0` cycling all displays off and on.
-The native `Ch1` through `Ch4` controls, recovery, and other
+channel-switching, USB/video/audio routing, auto-scan, and `W0` exchanges
+through the integration. The user observed `W0` cycling all displays off
+and on. The native `Ch1` through `Ch4` controls, recovery, and other
 hardware configurations still need hardware verification. The
 [protocol reference](docs/commands.md) records the evidence and the
 features that still need confirmation.
@@ -79,21 +79,23 @@ integration entry; its existing entities are preserved.
 | Channel select | Sends `Ch1` through `Ch4`; reports `Channel 1` through `Channel 4` from received feedback. |
 | Reset displays button | Sends `W0`, matching the previous dashboard's Reset action. The user observed all displays cycling off and on; the captured reply is `Wake-Up : DP-ALL`. |
 | Hotkey select | Selects `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock` using `ctrl`, `shift`, `scroll`, or `caps`; reports recognized feedback. |
-| Audio, Hub 1, and Hub 2 sensors | Report `Sync`; Hub 1 also reports the tested fixed assignment to `Channel 2`. |
+| Audio routing sensor | Reports `Sync` or the tested fixed assignment to `Channel 1`. |
+| Hub 1 and Hub 2 sensors | Report `Sync`; Hub 1 also reports the tested fixed assignment to `Channel 2`. |
 | Video 1 routing sensor | Reports the tested `Channel 2` assignment or `Sync` from routing replies. |
 | Sync both USB hubs button | Sends `h0p0`, restoring both hubs to Sync together. |
 | Sync video output 1 button | Sends `v1p0`, restoring Video 1 to Sync independently. |
 | Sync all video outputs button | Sends `v0p0`, restoring all video outputs to Sync. |
+| Sync audio button | Sends `o0`, restoring audio routing to Sync. |
+| Auto scan select | Selects `Off`, `5 seconds`, `8 seconds`, `15 seconds`, `20 seconds`, or `30 seconds` using `s0` through `s5`. Choosing a duration starts scanning. |
 | Buzzer switch | Sends `BZON` or `BZOFF`; reports the received on/off state. |
 | Mouse channel switching switch | Sends `M1` to enable or `M0` to disable mouse channel switching; reports the received on/off state. |
 
 The controls and routing sensors describe observed state. Routing buttons
 request the tested Sync actions; fixed assignments remain available through
 the manual command action while full routing selectors await more evidence.
-Audio routing remains read-only. State remains unknown until relevant
-feedback arrives; sending a command does not
-establish that it succeeded. Hotkey, buzzer, and mouse channel switching
-each have one control that also reports state. Their earlier read-only
+State remains unknown until relevant feedback arrives; sending a command
+does not establish that it succeeded. Hotkey, buzzer, and mouse channel
+switching each have one control that also reports state. Their earlier read-only
 sensors are removed during this prerelease development.
 
 Repeated captures show `K1P0` producing a report
@@ -122,9 +124,10 @@ requests matching the last reported state, and wait for feedback before
 changing state.
 
 Use the entities on the integration's device page to select a channel or
-hotkey, control the buzzer or mouse channel switching, reset displays, or
-restore USB/video routing to Sync. In an automation, replace the example
-entity IDs below with the ones created in your installation:
+hotkey, control the buzzer or mouse channel switching, reset displays,
+restore USB/video/audio routing to Sync, or configure auto-scan. In an
+automation, replace the example entity IDs below with the ones created in
+your installation:
 
 ```yaml
 action: select.select_option
@@ -164,6 +167,14 @@ target:
 action: button.press
 target:
   entity_id: button.your_kvm_sync_usb_hubs
+```
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.your_kvm_auto_scan
+data:
+  option: "Off"
 ```
 
 For a command already known to work with your device, use the
@@ -243,6 +254,38 @@ not establish video routing state. Sync buttons also wait for received
 feedback before changing any sensor state. Routing sensors provide
 observed state alongside these action buttons; no stateful routing
 selector has been introduced yet.
+
+The [audio and scan capture](docs/commands.md#debug-capture-after-audio-and-auto-scan-commands)
+shows `o1` reporting audio routed to Channel 1 and `o0` reporting Sync.
+The Audio routing sensor recognizes both replies, and **Sync audio**
+sends the tested lowercase `o0`. Other fixed audio assignments remain
+unconfirmed; the manual command action can send the tested `o1`. The user
+verified audio from machine 1 with `o1`, audio following the selected
+channel with `o0`, and both audio routing and auto-scan affecting both
+linked KVMs.
+
+**Auto scan** combines stopping and choosing a scan interval in one
+selector. Selecting a duration sends `s1` through `s5` and starts
+automatic channel changes; selecting `Off` sends `s0`. The five durations
+come from the device's interval replies. Only the 5-second scan has a
+captured sequence of channel changes, and the user reported it disrupting
+inputs while the monitors adjusted. A physical channel-button press does
+not provide an explicit scan-off reply; the selector therefore waits for
+`Auto Scan : OFF` to report `Off`.
+
+The selector remains unknown until it receives either an explicit OFF
+reply or both ON and a recognized interval. While scanning is on, it shows
+the last reported interval; during a change, a new ON reply can arrive
+before the new interval. The captured `k1p0` reports do not include scan
+settings, so startup does not assume scanning is off.
+
+The [UART board-selection capture](docs/commands.md#debug-capture-after-uart-board-selection-commands)
+records `u1` reporting `UART to DP1-Board`, `u2` reporting
+`UART to DP2-Board`, and `u0` reporting a return to `USB-Board` with later
+diagnostics. These are available through the manual command action. Their
+effect on later commands and scope in the daisy chain remain unconfirmed;
+they are not exposed as routine controls or sent automatically. The
+same capture records `v3p0` returning `ERROR`.
 
 ## Debugging serial communication
 

@@ -1,0 +1,304 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "device": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0",
+  "user_observations": {
+    "s1": "The user pressed a physical button to return to channel 2 because scanning interrupted inputs faster than the monitors could adjust.",
+    "manual_channel_report_time": "12:31:40.654",
+    "subsequent_physical_confirmation": "The user confirmed that o1 routes audio from machine 1, o0 restores audio following the selected channel, and both audio routing and auto-scan affect both linked KVMs."
+  },
+  "evidence_scope": "Interval values are reported by device replies; no independent timing of all intervals was supplied. The subsequent physical confirmation adds no raw bytes or timing measurements. The manual CH2 report contains no auto-scan OFF feedback.",
+  "events": [
+    {
+      "direction": "TX",
+      "time": "12:30:25.726",
+      "ascii": "o1\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:30:25.734",
+      "ascii": "AUDIO : CHANNEL1\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:30:35.452",
+      "ascii": "o0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:30:35.461",
+      "ascii": "AUDIO : Sync\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:30:57.101",
+      "ascii": "s1\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:30:57.123",
+      "ascii": "Auto Scan "
+    },
+    {
+      "direction": "RX",
+      "time": "12:30:57.125",
+      "ascii": ": ON\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:30:57.150",
+      "ascii": "Auto Scan "
+    },
+    {
+      "direction": "RX",
+      "time": "12:30:57.152",
+      "ascii": ": 1(5sec)\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:02.107",
+      "ascii": "CH3\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:07.115",
+      "ascii": "CH4\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:12.124",
+      "ascii": "CH1\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:17.132",
+      "ascii": "CH2\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:22.140",
+      "ascii": "C"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:22.142",
+      "ascii": "H3\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:27.147",
+      "ascii": "CH4"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:27.149",
+      "ascii": "\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:32.172",
+      "ascii": "CH1\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:37.171",
+      "ascii": "CH2\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:31:40.654",
+      "ascii": "CH2\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:32:31.166",
+      "ascii": "s0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:32:31.188",
+      "ascii": "Auto Scan"
+    },
+    {
+      "direction": "RX",
+      "time": "12:32:31.190",
+      "ascii": " : OFF\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:33:02.374",
+      "ascii": "s2\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:02.394",
+      "ascii": "Aut"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:02.396",
+      "ascii": "o Scan : ON"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:02.398",
+      "ascii": "\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:02.436",
+      "ascii": "Au"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:02.438",
+      "ascii": "to Scan : 2("
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:02.440",
+      "ascii": "8Sec)\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:33:06.892",
+      "ascii": "s0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:06.913",
+      "ascii": "Auto S"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:06.915",
+      "ascii": "can : OFF\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:33:12.621",
+      "ascii": "s3\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:12.641",
+      "ascii": "Auto Sc"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:12.643",
+      "ascii": "an : ON\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:12.667",
+      "ascii": "A"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:12.669",
+      "ascii": "uto Scan : 3"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:12.670",
+      "ascii": "(15Sec)\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:33:16.075",
+      "ascii": "s0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:16.095",
+      "ascii": "Auto Sc"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:16.097",
+      "ascii": "an : OFF\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:33:20.458",
+      "ascii": "s4\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:20.479",
+      "ascii": "A"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:20.481",
+      "ascii": "uto Scan : O"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:20.482",
+      "ascii": "N\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:20.506",
+      "ascii": "Auto Sc"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:20.508",
+      "ascii": "an : 4(20Se"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:20.510",
+      "ascii": "c)\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:33:23.871",
+      "ascii": "s5\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:23.892",
+      "ascii": "Au"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:23.894",
+      "ascii": "to Scan : ON\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:23.918",
+      "ascii": "Auto S"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:23.920",
+      "ascii": "can : 5(30Sec)\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:33:27.293",
+      "ascii": "s0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:27.314",
+      "ascii": "Auto"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:27.315",
+      "ascii": " Scan : OFF"
+    },
+    {
+      "direction": "RX",
+      "time": "12:33:27.317",
+      "ascii": "\r\n"
+    }
+  ]
+}

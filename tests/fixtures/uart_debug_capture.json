@@ -1,0 +1,187 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "device": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0",
+  "user_context": "Results from manually sending u0, u1, and u2; no physical UART scope observation was supplied.",
+  "overlap": "The opening v1p0 exchange also appears in routing_debug_capture.json and is preserved here as part of the supplied chronology.",
+  "diagnostic_context": "The original log classified Video1 : SYNC-mode as unrecognized; the current parser recognizes it. UART, version, Ready-0, and ERROR replies remain diagnostics without entity-state mappings.",
+  "case_observations": "Only lowercase u0, u1, and u2 are captured; uppercase equivalence is not established.",
+  "events": [
+    {
+      "direction": "TX",
+      "time": "12:20:12.449",
+      "ascii": "v1p0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:20:12.494",
+      "ascii": "Video1"
+    },
+    {
+      "direction": "RX",
+      "time": "12:20:12.496",
+      "ascii": " : SYNC-mod"
+    },
+    {
+      "direction": "RX",
+      "time": "12:20:12.497",
+      "ascii": "e\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:21:08.137",
+      "ascii": "v3p0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:21:08.145",
+      "ascii": "ERROR\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:27:45.495",
+      "ascii": "u1\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:27:45.531",
+      "ascii": "UART "
+    },
+    {
+      "direction": "RX",
+      "time": "12:27:45.533",
+      "ascii": "to DP1-Board"
+    },
+    {
+      "direction": "RX",
+      "time": "12:27:45.535",
+      "ascii": "\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:27:45.621",
+      "ascii": " "
+    },
+    {
+      "direction": "RX",
+      "time": "12:27:45.623",
+      "ascii": "UDP2_14AP_D"
+    },
+    {
+      "direction": "RX",
+      "time": "12:27:45.625",
+      "ascii": "P : Version_"
+    },
+    {
+      "direction": "RX",
+      "time": "12:27:45.626",
+      "ascii": "Number - 0009 - D1223 \r"
+    },
+    {
+      "direction": "RX",
+      "time": "12:27:45.628",
+      "ascii": "\n\r"
+    },
+    {
+      "direction": "TX",
+      "time": "12:28:06.651",
+      "ascii": "u0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:28:06.660",
+      "ascii": " UART connect to USB-Board \r\n\r"
+    },
+    {
+      "direction": "RX",
+      "time": "12:28:06.872",
+      "ascii": "R"
+    },
+    {
+      "direction": "RX",
+      "time": "12:28:06.874",
+      "ascii": "eady-0\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:29:42.197",
+      "ascii": "u2\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:42.237",
+      "ascii": "UART to DP2"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:42.238",
+      "ascii": "-Board\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:42.327",
+      "ascii": " UDP2"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:42.329",
+      "ascii": "_14AP_DP : V"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:42.331",
+      "ascii": "ersion_Numb"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:42.332",
+      "ascii": "er - 0009 - D1223 \r\n\r"
+    },
+    {
+      "direction": "TX",
+      "time": "12:29:46.437",
+      "ascii": "u0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:46.441",
+      "ascii": " UART "
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:46.443",
+      "ascii": "connect to USB-Board \r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:46.445",
+      "ascii": "\r"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:46.535",
+      "ascii": " UDP2_1"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:46.536",
+      "ascii": "4AP_DP : Ve"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:46.538",
+      "ascii": "rsion_Number"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:46.540",
+      "ascii": " - 0009 - D1223 \r\n\r"
+    },
+    {
+      "direction": "RX",
+      "time": "12:29:46.655",
+      "ascii": "Ready-0\r\n"
+    }
+  ]
+}

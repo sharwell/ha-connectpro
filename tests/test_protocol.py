@@ -27,6 +27,7 @@ class ProtocolTests(unittest.TestCase):
             "Mouse change channel : ON": {"mouse_change_channel": True},
             "Mouse change channel : OFF": {"mouse_change_channel": False},
             "AUDIO : Sync": {"audio": "Sync"},
+            "AUDIO : CHANNEL1": {"audio": "Channel 1"},
             "HUB1 : Sync": {"hub1": "Sync"},
             "HUB2 : Sync": {"hub2": "Sync"},
         }
@@ -44,6 +45,45 @@ class ProtocolTests(unittest.TestCase):
         for response, expected in responses.items():
             with self.subTest(response=response):
                 self.assertEqual(protocol.parse_response(response), expected)
+
+    def test_scan_feedback_keeps_enabled_and_interval_fields_separate(self) -> None:
+        """Timing feedback does not enable scanning or alter the selected channel."""
+        responses = {
+            "Auto Scan : ON": {"auto_scan": True},
+            "Auto Scan : OFF": {"auto_scan": False},
+            "Auto Scan : 1(5sec)": {"auto_scan_interval": "5 seconds"},
+            "Auto Scan : 2(8Sec)": {"auto_scan_interval": "8 seconds"},
+            "Auto Scan : 3(15Sec)": {"auto_scan_interval": "15 seconds"},
+            "Auto Scan : 4(20Sec)": {"auto_scan_interval": "20 seconds"},
+            "Auto Scan : 5(30Sec)": {"auto_scan_interval": "30 seconds"},
+        }
+        for response, expected in responses.items():
+            with self.subTest(response=response):
+                self.assertEqual(protocol.parse_response(response), expected)
+
+    def test_unverified_audio_scan_and_uart_messages_do_not_set_state(self) -> None:
+        """Unobserved routing/timing and UART diagnostics remain unrecognized."""
+        responses = (
+            "AUDIO : CHANNEL2",
+            "AUDIO : CHANNEL3",
+            "AUDIO : CHANNEL4",
+            "AUDIO : Channel1",
+            "Auto Scan : On",
+            "Auto Scan : Off",
+            "Auto Scan : 1(5Sec)",
+            "Auto Scan : 2(8sec)",
+            "Auto Scan : 1(8Sec)",
+            "Auto Scan : 6(60Sec)",
+            "UART to DP1-Board",
+            "UART to DP2-Board",
+            "UART connect to USB-Board",
+            "Ready-0",
+            "ERROR",
+        )
+        for response in responses:
+            with self.subTest(response=response):
+                self.assertEqual(protocol.parse_response(response), {})
+                self.assertNotIn(response, protocol.IGNORED_RESPONSES)
 
     def test_observed_routing_replies_update_only_confirmed_endpoint(self) -> None:
         """Global video sync reports only the one confirmed video endpoint."""

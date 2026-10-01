@@ -35,11 +35,17 @@
       },
       "hotkey": {
         "name": "Hotkey"
+      },
+      "auto_scan": {
+        "name": "Auto Scan"
       }
     },
     "button": {
       "reset": {
         "name": "Reset displays"
+      },
+      "sync_audio": {
+        "name": "Sync audio"
       },
       "sync_usb_hubs": {
         "name": "Sync both USB hubs"
