@@ -1,0 +1,51 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "context": "The user supplied physical observations separately from the serial log.",
+  "user_observations": {
+    "w0_effect": "W0 caused all displays to reset, turning off and back on.",
+    "later_channel_reports": "The later CH1 and CH2 messages were unrelated to W0."
+  },
+  "user_hypothesis": "The display off/on cycle may cause the connected machines to redetect the displays; this was not confirmed.",
+  "events": [
+    {
+      "direction": "TX",
+      "time": "11:18:27.291",
+      "ascii": "W0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:18:27.392",
+      "ascii": "W"
+    },
+    {
+      "direction": "RX",
+      "time": "11:18:27.394",
+      "ascii": "ake-Up : DP-"
+    },
+    {
+      "direction": "RX",
+      "time": "11:18:27.399",
+      "ascii": "ALL\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:22:48.045",
+      "ascii": "CH1\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:22:50.724",
+      "ascii": "CH2\r\n"
+    }
+  ],
+  "logged_diagnostics": [
+    {
+      "time": "11:18:27.400",
+      "level": "DEBUG",
+      "classification": "unrecognized line",
+      "line": "Wake-Up : DP-ALL"
+    }
+  ]
+}

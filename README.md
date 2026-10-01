@@ -7,9 +7,10 @@ longer needed.
 
 This is an initial implementation based on the existing installation's
 commands and response mappings. User-provided captures from physical
-hardware confirm manual status and targeted channel exchanges through the
-integration. The native `Ch1` through `Ch4` controls, Reset, recovery, and
-other hardware configurations still need hardware verification. The
+hardware confirm manual status, targeted channel, and `W0` exchanges
+through the integration. The user observed `W0` cycling all displays off
+and on. The native `Ch1` through `Ch4` controls, recovery, and other
+hardware configurations still need hardware verification. The
 [protocol reference](docs/commands.md) records the evidence and the
 features that still need confirmation.
 
@@ -73,7 +74,7 @@ existing entities are preserved.
 | Entity | Behavior |
 | --- | --- |
 | Channel select | Sends `Ch1` through `Ch4`; reports `Channel 1` through `Channel 4` from received feedback. |
-| Reset button | Sends `W0`, matching the previous dashboard's Reset action. The scope of this reset is not yet documented. |
+| Reset displays button | Sends `W0`, matching the previous dashboard's Reset action. The user observed all displays cycling off and on; the captured reply is `Wake-Up : DP-ALL`. |
 | Hotkey sensor | Reports `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock` from recognized feedback. |
 | Audio, Hub 1, and Hub 2 sensors | Report the confirmed `Sync` feedback. Other modes need protocol evidence. |
 | Buzzer binary sensor | Reports the received on/off state. |
@@ -99,7 +100,7 @@ reported channel matches. This keeps rapid requests, such as switching to
 Channel 3 and back to Channel 2 before feedback arrives, from being lost.
 
 Use the entities on the integration's device page to select a channel or
-press Reset. In an automation, replace the example entity IDs below with
+press Reset displays. In an automation, replace the example entity IDs below with
 the ones created in your installation:
 
 ```yaml
@@ -146,6 +147,14 @@ physical channel-2 button press updating it to `Channel 2`. This does not
 provide separate state for linked units. A separate captured `K2P0`
 attempt returned `ERROR`, so that command did not retrieve the second
 KVM's status in this installation.
+
+The [captured `W0` exchange](docs/commands.md#debug-capture-after-w0)
+returned `Wake-Up : DP-ALL`. The user observed all displays cycling off
+and on; computer-side redetection has not been verified. The button is
+named **Reset displays** to describe this effect. Its existing unique ID
+is preserved, and it still sends exactly `W0`. This reply does not update
+the integration's observed state. Later `CH1` / `CH2` messages in the log
+were unrelated channel feedback, as confirmed by the user.
 
 ## Debugging serial communication
 

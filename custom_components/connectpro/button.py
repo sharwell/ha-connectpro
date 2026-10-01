@@ -1,4 +1,4 @@
-"""Reset command for ConnectPro KVM devices."""
+"""Display reset command for ConnectPro KVM devices."""
 
 from __future__ import annotations
 
@@ -21,12 +21,12 @@ async def async_setup_entry(
     entry: ConnectProConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the KVM reset button."""
+    """Set up the KVM display reset button."""
     async_add_entities([ConnectProResetButton(entry)])
 
 
 class ConnectProResetButton(ConnectProEntity, ButtonEntity):
-    """Send the reset command used by the existing Home Assistant setup."""
+    """Send the command observed to cycle displays off and on."""
 
     _attr_entity_category = EntityCategory.CONFIG
     _attr_entity_registry_enabled_default = True
@@ -36,5 +36,5 @@ class ConnectProResetButton(ConnectProEntity, ButtonEntity):
         super().__init__(entry, "reset")
 
     async def async_press(self) -> None:
-        """Send reset without assuming any resulting device state."""
+        """Reset displays without assuming any resulting device state."""
         await self._async_send_command("W0")

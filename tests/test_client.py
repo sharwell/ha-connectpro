@@ -527,6 +527,93 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 messages,
             )
 
+    async def test_w0_capture_waits_for_complete_lines_without_inventing_state(
+        self,
+    ) -> None:
+        """The unknown W0 reply leaves state unknown until later channel feedback."""
+        capture = json.loads(
+            (Path(__file__).parent / "fixtures" / "w0_debug_capture.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        self.assertEqual(
+            events,
+            [
+                ("TX", b"W0\r\n"),
+                ("RX", b"W"),
+                ("RX", b"ake-Up : DP-"),
+                ("RX", b"ALL\r\n"),
+                ("RX", b"CH1\r\n"),
+                ("RX", b"CH2\r\n"),
+            ],
+        )
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_parse_counts = [0, 0, 0, 1, 2, 3]
+        expected_states = [
+            {},
+            {},
+            {},
+            {},
+            {"channel": "Channel 1"},
+            {"channel": "Channel 2"},
+        ]
+        unknown_message = "RX /dev/test-kvm unrecognized line: 'Wake-Up : DP-ALL'"
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            task = self.start_reader()
+            for index, (direction, payload) in enumerate(events):
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                else:
+                    self.reader.feed_data(payload)
+                # Replay read boundaries, not the minutes between timestamps.
+                await asyncio.sleep(0)
+                self.assertEqual(parse.call_count, expected_parse_counts[index])
+                self.assertEqual(self.client.state, expected_states[index])
+                self.assertEqual(self.writer.writes, [b"W0\r\n"])
+                self.assertEqual(
+                    sum(
+                        record.getMessage() == unknown_message
+                        for record in captured.records
+                    ),
+                    0 if index < 3 else 1,
+                )
+
+        self.assertEqual(
+            [call.args[0] for call in parse.call_args_list],
+            ["Wake-Up : DP-ALL", "CH1", "CH2"],
+        )
+        self.assertEqual(observed, [{"channel": "Channel 1"}, {"channel": "Channel 2"}])
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.opener.assert_awaited_once()
+        messages = [record.getMessage() for record in captured.records]
+        self.assertEqual(
+            [
+                message
+                for message in messages
+                if message.startswith(("TX /dev/test-kvm: ", "RX /dev/test-kvm: "))
+            ],
+            [
+                f"{direction} /dev/test-kvm: {payload!r}"
+                for direction, payload in events
+            ],
+        )
+        self.assertEqual(messages.count(unknown_message), 1)
+
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
         complete = asyncio.Event()

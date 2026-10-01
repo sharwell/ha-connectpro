@@ -16,6 +16,8 @@ far from the current Home Assistant setup:
   channel-2 button presses in a two-KVM chain on 2026-10-01
 - A subsequent capture of `K1P1`, `K1P0`, and a physical channel-2 button
   press on 2026-10-01, plus a separate captured `K2P0` / `ERROR` exchange
+- A captured `W0` exchange on 2026-10-01 and the user's observation that
+  all displays cycled off and on; later channel feedback was unrelated
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -28,7 +30,7 @@ which physical KVM changed channel. The meanings of every command are not
 yet established.
 
 The tables below preserve the original YAML setup as protocol evidence.
-The integration now implements the confirmed channel and Reset actions,
+The integration now implements channel selection and the `W0` display action,
 receives the listed state feedback into native entities, and offers a
 generic command action. See the [README](../README.md) for installation,
 migration, and logging instructions. The old helpers and shell actions are
@@ -195,8 +197,9 @@ domain; for example, call `shell_command.serial_command_ch1` to write
 | `serial_command_u2` | `U2` |
 
 The request-channel script establishes `Ch1` through `Ch4` as channel
-selection commands. The dashboard labels `W0` as `Reset`, but the scope of
-that reset is not established. The later targeted channel test below
+selection commands. The dashboard labels `W0` as `Reset`; a later capture
+and physical observation below associate it with displays cycling off
+and on and the reply `Wake-Up : DP-ALL`. The targeted channel test below
 establishes effects for uppercase `K1P1` and `K2P1` in one two-KVM chain;
 it does not verify every lowercase sender above. Other command meanings
 remain unconfirmed on this hardware; names alone do not prove a mapping
@@ -461,6 +464,42 @@ a downstream unit, or whether another command can retrieve downstream
 status. The reader logs `ERROR` as an unrecognized line without changing
 observed state, disconnecting, or retrying the command.
 
+### Debug capture after `W0`
+
+On 2026-10-01 the user manually sent `W0` through the integration. The
+[capture fixture](../tests/fixtures/w0_debug_capture.json) preserves all
+six ordered raw TX/RX events and the unrecognized-line diagnostic:
+
+| Direction | Timestamp | Raw bytes |
+| --- | --- | --- |
+| TX | `11:18:27.291` | `b'W0\r\n'` |
+| RX | `11:18:27.392` | `b'W'` |
+| RX | `11:18:27.394` | `b'ake-Up : DP-'` |
+| RX | `11:18:27.399` | `b'ALL\r\n'` |
+| RX | `11:22:48.045` | `b'CH1\r\n'` |
+| RX | `11:22:50.724` | `b'CH2\r\n'` |
+
+The first three reads form one line, `Wake-Up : DP-ALL`, logged as
+unrecognized at `11:18:27.400`. The user observed all displays resetting
+off and on. They suggested this might cause connected computers to
+redetect the displays; that computer-side effect is a hypothesis, not a
+confirmed observation. The response text suggests a DisplayPort wake-up
+operation, while the observed off/on cycle establishes the display effect
+in this installation. The capture does not establish a factory reset,
+KVM reboot, settings reset, or the scope of `DP-ALL` in other topologies.
+
+The user explicitly confirmed that the later `CH1` and `CH2` reports were
+unrelated to `W0`. They are ordinary channel feedback, not evidence that
+the display operation switches channels. The response timestamps are host
+log times; the three wake-up reads arrived 101, 103, and 108 ms after TX,
+without establishing a guaranteed response deadline.
+
+The reader does not change observed state for `W0` or `Wake-Up : DP-ALL`.
+The replay regression verifies the exact write and raw reads, one
+unrecognized-line diagnostic after the full line arrives, later channel
+updates to `Channel 1` and `Channel 2`, continued connection, and no extra
+commands. The response is not treated as a persistent display-power state.
+
 ## Dashboard and channel request behavior
 
 ### Channel buttons
@@ -501,8 +540,10 @@ or response timeout is shown in the script.
 The button labeled `Reset` directly calls
 `shell_command.serial_command_w0`, which writes `W0\r\n`. It bypasses the
 channel request script and has no channel-state guard. The snippet does
-not show an expected response. The effect and scope of this reset remain
-unknown; the label does not establish a factory reset.
+not show an expected response. The later `W0` capture above supplies
+`Wake-Up : DP-ALL`, with all displays observed cycling off and on. The
+integration calls this control **Reset displays**; the original dashboard
+label is not evidence of a factory reset or a KVM settings reset.
 
 ## Response formats
 
@@ -518,9 +559,9 @@ punctuation. The automation itself does not trim whitespace or normalize
 case. The stock serial sensor strips leading and trailing whitespace
 before publishing its state, as described above. The configured sensor
 has no additional value template. These are processed sensor state
-strings. The later `K1P0` debug capture establishes CRLF response
-terminators for that exchange; framing for other commands and hardware
-configurations remains unverified.
+strings. The later debug captures establish CRLF response terminators for
+the supplied `K1P0`, targeted-channel, and `W0` exchanges; framing for
+other commands and hardware configurations remains unverified.
 
 For select helpers, the automation calls `input_select.select_option` with
 the exact option shown below. For boolean helpers, it calls
@@ -628,8 +669,11 @@ channel value is consistent with the first/local KVM. Side effects and
 downstream status retrieval remain unconfirmed, and no automatic startup
 or status command is sent.
 
-The channel select sends `Ch1` through `Ch4`, and the Reset button sends
-`W0`. Every valid channel selection sends a command, including a selection
+The channel select sends `Ch1` through `Ch4`, and the Reset displays button
+sends `W0`. The button retains its existing `reset` entity key and unique
+ID; changing its display name does not create a replacement entity. Its
+`Wake-Up : DP-ALL` reply is debug logged without fabricating state.
+Every valid channel selection sends a command, including a selection
 that matches the last observed channel. Unlike the old script's guard,
 this allows a quick change and change back before the first response
 arrives. Other command meanings remain unconfirmed, so those features are
@@ -666,8 +710,10 @@ To complete the reference, collect:
 - The helper definitions, especially the complete option lists for
   `input_select.kvm_audio`, `input_select.kvm_hub1`, and
   `input_select.kvm_hub2`.
-- The actual effect of the `Reset` button (`W0`), including which state or
-  settings it changes.
+- The scope of `W0` across displays and linked KVMs in other topologies,
+  and whether computers actually redetect displays after the observed
+  off/on cycle. Its `Wake-Up : DP-ALL` reply and the display cycle in this
+  installation are now recorded; KVM settings changes are not established.
 - Any side effects of `K1P0` beyond returning the observed status report.
   The `K1P1` and `K2P1` channel-selection effects are observed in this
   installation, but other ports/levels and lowercase equivalence still
