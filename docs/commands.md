@@ -1,25 +1,40 @@
 # ConnectPro KVM command reference
 
 This file records the ConnectPro KVM serial protocol details collected so
-far and the behavior of the current Home Assistant automations:
+far from the current Home Assistant setup:
 
 - `Configure serial port when Home Assistant starts`
 - `Process serial sensor inputs`
+- `shell_command.yaml`
+- The script with alias `KVM - request channel`
+- Dashboard channel buttons and the button labeled `Reset`
 
-The response mappings below come from those automations. Serial settings
-and outgoing commands were recorded in earlier repository notes; the two
-automations do not include the shell command definitions or demonstrate
-which commands produce which responses.
+These sources establish port configuration, outgoing command payloads,
+dashboard actions, and response-to-helper mappings. They do not include
+raw command/response captures or establish the meanings of every command.
 
 ## Serial settings
 
-Earlier repository notes record these settings for the `stty`
-configuration used outside the integration:
+`shell_command.configure_serial` runs this command:
 
-- Baudrate: 115200
-- Data bits: 8
-- Parity: none
-- Stop bits: 1
+```sh
+stty -F /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0 115200 cs8 -cstopb -parenb
+```
+
+The configured settings are:
+
+- Baudrate: 115200 (`115200`)
+- Data bits: 8 (`cs8`)
+- Parity: none (`-parenb`)
+- Stop bits: 1 (`-cstopb`)
+
+Every supplied sender writes to that same device path. It identifies the
+FTDI USB serial adapter in this installation; it is not a universal KVM
+device path or a default to hard-code into the integration.
+
+The command does not explicitly set hardware/software flow control,
+raw/canonical mode, echo, or newline translation. Those effective terminal
+settings cannot be determined from this command alone.
 
 ### Home Assistant startup
 
@@ -27,84 +42,155 @@ configuration used outside the integration:
 `homeassistant` start event, has no conditions, and calls
 `shell_command.configure_serial` with no parameters. Its mode is `single`.
 
-The shell command body is not included in the supplied automation, so the
-device path, full `stty` arguments (including flow control and terminal
-modes), and failure handling still need to be recorded. The automation
-does not show how configuration is ordered relative to the serial sensor
-opening the port, or what happens after a USB disconnect/reconnect.
+The supplied startup automation and shell command show no explicit retry
+or recovery logic. They do not establish how configuration is ordered
+relative to the serial sensor opening the port, or what happens after a
+USB disconnect/reconnect.
 
 ## Command format
 
-Commands are ASCII text terminated with `\r\n` (CRLF). Case appears to be
-significant for some commands.
+The supplied senders use `echo -e -n` and redirect output to the serial
+device. They request an ASCII command followed by `\r\n` (CRLF), without
+an additional newline from `echo`. Preserve payload case exactly: for
+example, the action ending in `_ch1` writes `Ch1`, while `_v1p0` writes
+`V1P0`. The command definitions do not establish whether the device accepts
+other capitalization.
+
+These are the intended write payloads. Raw captures would still be needed
+to verify bytes on the wire, including any terminal output processing.
 
 ## Command catalog
 
-All commands below are sent with `\r\n` appended.
+All commands below append `\r\n` and target the device path above.
 
 ### Generic command
 
-The existing setup supports sending an arbitrary command string by
-encoding each character as a hex byte and writing the result to the
-serial port.
+`shell_command.serial_command` accepts `command_text`. Its Jinja template
+formats each character's ordinal as an uppercase hexadecimal escape with
+at least two digits, then appends the CRLF escapes:
 
-### Known commands (meaning TBD)
+```jinja
+{% for char in command_text %}\x{{ '%02X' % (char | ord) }}{% endfor %}\r\n
+```
 
-- k1p0
-- k1p1
-- k1p2
-- k1p3
-- k1p4
-- Ch1
-- Ch2
-- Ch3
-- Ch4
-- bzon
-- bzoff
-- ctrl
-- shift
-- scroll
-- caps
-- h0p0
-- h1p1
-- h1p2
-- h1p3
-- h1p4
-- h2p1
-- h2p2
-- h2p3
-- h2p4
-- R0
-- O0
-- O1
-- O2
-- O3
-- O4
-- M1
-- M0
-- S0
-- S1
-- S2
-- S3
-- S4
-- S5
-- V0P0
-- V1P0
-- V1P1
-- V1P2
-- V1P3
-- V1P4
-- V2P0
-- V2P1
-- V2P2
-- V2P3
-- V2P4
-- W0
-- W1
-- W2
-- U0
-- U1
-- U2
+For example, `command_text: Ch2` renders `\x43\x68\x32\r\n`, requesting
+bytes `43 68 32 0D 0A`. The sender writes the command text as bytes, not as
+literal hexadecimal digits. The known command catalog is ASCII; this
+example is derived from the template, not a captured device exchange.
+
+### Fixed command actions
+
+The file defines 55 fixed senders, in addition to the generic sender and
+port configuration action. Each action below is in the `shell_command`
+domain; for example, call `shell_command.serial_command_ch1` to write
+`Ch1\r\n`.
+
+| Action name (after `shell_command.`) | Command before CRLF |
+| --- | --- |
+| `serial_command_k1p0` | `k1p0` |
+| `serial_command_k1p1` | `k1p1` |
+| `serial_command_k1p2` | `k1p2` |
+| `serial_command_k1p3` | `k1p3` |
+| `serial_command_k1p4` | `k1p4` |
+| `serial_command_ch1` | `Ch1` |
+| `serial_command_ch2` | `Ch2` |
+| `serial_command_ch3` | `Ch3` |
+| `serial_command_ch4` | `Ch4` |
+| `serial_command_bzon` | `bzon` |
+| `serial_command_bzoff` | `bzoff` |
+| `serial_command_ctrl` | `ctrl` |
+| `serial_command_shift` | `shift` |
+| `serial_command_scroll` | `scroll` |
+| `serial_command_caps` | `caps` |
+| `serial_command_h0p0` | `h0p0` |
+| `serial_command_h1p1` | `h1p1` |
+| `serial_command_h1p2` | `h1p2` |
+| `serial_command_h1p3` | `h1p3` |
+| `serial_command_h1p4` | `h1p4` |
+| `serial_command_h2p1` | `h2p1` |
+| `serial_command_h2p2` | `h2p2` |
+| `serial_command_h2p3` | `h2p3` |
+| `serial_command_h2p4` | `h2p4` |
+| `serial_command_r0` | `R0` |
+| `serial_command_o0` | `O0` |
+| `serial_command_o1` | `O1` |
+| `serial_command_o2` | `O2` |
+| `serial_command_o3` | `O3` |
+| `serial_command_o4` | `O4` |
+| `serial_command_m1` | `M1` |
+| `serial_command_m0` | `M0` |
+| `serial_command_s0` | `S0` |
+| `serial_command_s1` | `S1` |
+| `serial_command_s2` | `S2` |
+| `serial_command_s3` | `S3` |
+| `serial_command_s4` | `S4` |
+| `serial_command_s5` | `S5` |
+| `serial_command_v0p0` | `V0P0` |
+| `serial_command_v1p0` | `V1P0` |
+| `serial_command_v1p1` | `V1P1` |
+| `serial_command_v1p2` | `V1P2` |
+| `serial_command_v1p3` | `V1P3` |
+| `serial_command_v1p4` | `V1P4` |
+| `serial_command_v2p0` | `V2P0` |
+| `serial_command_v2p1` | `V2P1` |
+| `serial_command_v2p2` | `V2P2` |
+| `serial_command_v2p3` | `V2P3` |
+| `serial_command_v2p4` | `V2P4` |
+| `serial_command_w0` | `W0` |
+| `serial_command_w1` | `W1` |
+| `serial_command_w2` | `W2` |
+| `serial_command_u0` | `U0` |
+| `serial_command_u1` | `U1` |
+| `serial_command_u2` | `U2` |
+
+The request-channel script establishes `Ch1` through `Ch4` as channel
+selection commands. The dashboard labels `W0` as `Reset`, but the scope of
+that reset is not established. The remaining command meanings are still
+unconfirmed; names alone do not prove a mapping to buzzer, hotkey, mouse,
+audio, hub, or other features.
+
+## Dashboard and channel request behavior
+
+### Channel buttons
+
+All four supplied channel buttons call `script.kvm_request_channel` with
+the `channel` value below. The script with alias `KVM - request channel`
+has the matching role, but its exported YAML omits its entity ID. Confirm
+that ID to establish that it is the script referenced by the dashboard.
+
+| Dashboard label | Requested helper option | Action in the supplied script | Command |
+| --- | --- | --- | --- |
+| Alpha | `Channel 1` | `shell_command.serial_command_ch1` | `Ch1` |
+| Beta | `Channel 2` | `shell_command.serial_command_ch2` | `Ch2` |
+| Gamma | `Channel 3` | `shell_command.serial_command_ch3` | `Ch3` |
+| Delta | `Channel 4` | `shell_command.serial_command_ch4` | `Ch4` |
+
+These labels are installation-specific names. Each button reads
+`input_select.kvm_channel` and highlights its matching option with a
+different icon and color. The cards hide the state text.
+
+The supplied script uses `mode: single` and implements this sequence:
+
+1. Read `input_select.kvm_channel` into `current`.
+2. If `current` equals the requested `channel`, do nothing.
+3. Otherwise, send the corresponding `Ch1`, `Ch2`, `Ch3`, or `Ch4` command
+   for an exact `Channel 1` through `Channel 4` match. An unsupported value
+   matches no branch and causes no command to be sent.
+
+The script does not update the helper optimistically or wait for a
+response. The serial sensor automation separately updates the helper from
+`CH1`/`CH-1` through `CH4`/`CH-4`, which then drives button highlighting.
+This provides a same-selection guard based on the helper's stored state;
+it does not query the device to check that the helper is current. No retry
+or response timeout is shown in the script.
+
+### Reset button
+
+The button labeled `Reset` directly calls
+`shell_command.serial_command_w0`, which writes `W0\r\n`. It bypasses the
+channel request script and has no channel-state guard. The snippet does
+not show an expected response. The effect and scope of this reset remain
+unknown; the label does not establish a factory reset.
 
 ## Response formats
 
@@ -192,34 +278,40 @@ capitalization or spacing, unlisted firmware messages, and values such as
 `unknown` or `unavailable` if passed through this state trigger. The
 automation does not contain a fallback parser or recovery action.
 
-## Example exchanges
+## Examples and response correlation
 
-The supplied automations show sensor-to-helper updates, for example:
+The supplied configuration establishes these individual behaviors:
 
+- A script request for `Channel 2`, when the helper has a different value,
+  invokes `shell_command.serial_command_ch2` to write `Ch2\r\n`.
 - Sensor state `CH-2` selects `Channel 2` on `input_select.kvm_channel`.
 - Sensor state `Buzzer : OFF` turns off `input_boolean.kvm_buzzer`.
 - Sensor state `SCROLL` selects `Scroll Lock` on `input_select.kvm_hotkey`.
 
-Command/response exchanges remain undocumented. Neither supplied
-automation shows a transmitted KVM command or establishes whether
-responses are acknowledgments, unsolicited updates, or replies to a
-status query. Response timing, ordering, and startup state discovery are
-also unknown.
+These examples are not a captured exchange: the sources do not establish
+which responses follow a particular command, or whether messages are
+acknowledgments, unsolicited updates, or replies to a status query.
+Response timing, ordering, and startup state discovery are also unknown.
 
 ## Details needed from the existing setup
 
 To complete the reference, collect:
 
-- The definition of `shell_command.configure_serial`, including the serial
-  device path and all port configuration arguments.
 - The configuration that creates `sensor.serial_sensor`, including any
-  decoding, line splitting, or whitespace handling.
-- Shell commands, scripts, and automations that send commands or react to
-  changes in the seven helpers listed above. These can establish command
-  meanings, write formatting, status queries, and any feedback-loop guards.
+  decoding, line splitting, whitespace handling, and port settings applied
+  by the sensor itself.
+- Confirmation that the supplied request-channel script has entity ID
+  `script.kvm_request_channel`.
+- Other scripts, automations, or dashboard controls that call the listed
+  senders or react to changes in the seven helpers above. These can
+  establish the remaining command meanings, status queries, and any
+  additional feedback-loop guards. The shell command definitions and
+  channel/Reset dashboard actions are already recorded here.
 - The helper definitions, especially the complete option lists for
   `input_select.kvm_audio`, `input_select.kvm_hub1`, and
   `input_select.kvm_hub2`.
+- The actual effect of the `Reset` button (`W0`), including which state or
+  settings it changes.
 - Representative command/response captures, including startup or status
   queries and any audio/hub modes beyond `Sync`, plus the KVM model and
   firmware version to identify the scope of the observed behavior.
