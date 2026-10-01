@@ -1,0 +1,19 @@
+UDP2_14AP_U3 : Version_Number - 0009 - D1223
+UDP2_14AP_DP : Version_Number - 0009 - D1223
+CH-1
+Hot KEY : CTRL
+Buzzer : ON
+HUB1 : Sync
+HUB2 : Sync
+AUDIO : Sync
+Mouse change channel : OFF
+V1P0
+V1P1
+K50_0 FW Ver B1.42
+K50_1 FW Ver B1.42
+K50_2 FW Ver B1.42
+K50_3 FW Ver B1.42
+K50_4 FW Ver B1.42
+K50_5 FW Ver B1.42
+K50_6 FW Ver B1.42
+K50_7 FW Ver B1.42

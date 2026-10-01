@@ -79,9 +79,11 @@ existing entities are preserved.
 The sensors describe observed state. Their corresponding controls are not
 exposed until the command meanings are confirmed. State remains unknown
 until the relevant feedback arrives; sending a command does not establish
-that it succeeded. The integration does not send an undocumented startup
-or status query. Entities become unavailable on a connection failure, and
-the integration retries the connection automatically.
+that it succeeded. An old email associates `K1P0` with a report containing
+all seven known state categories, but its purpose and possible setting
+changes remain unconfirmed. The integration therefore sends no automatic
+startup or status query. Entities become unavailable on a connection
+failure, and the integration retries the connection automatically.
 
 Each channel selection sends the requested command, even when the last
 reported channel matches. This keeps rapid requests, such as switching to

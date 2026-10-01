@@ -140,6 +140,51 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("unrecognized line", logs)
         self.assertIn("ignored line", logs)
 
+    async def test_complete_k1p0_report_preserves_state_and_unknown_lines(self) -> None:
+        """A fragmented status report updates all settings without sending commands."""
+        report = (
+            (Path(__file__).parent / "fixtures" / "k1p0_report.txt")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        self.assertEqual(len(report), 19)
+        # This is an email transcription, not a raw serial capture. LF is
+        # chosen for this test and does not establish the device's framing.
+        payload = ("\n".join(report) + "\n").encode("ascii")
+        await self.client.async_connect()
+
+        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+            task = self.start_reader()
+            for offset in range(0, len(payload), 17):
+                self.reader.feed_data(payload[offset : offset + 17])
+                # Let the reader process each fragment, including the final
+                # firmware lines after the seven state-bearing messages.
+                await asyncio.sleep(0)
+
+        self.assertEqual(
+            self.client.state,
+            {
+                "channel": "Channel 1",
+                "hotkey": "Ctrl",
+                "buzzer": True,
+                "hub1": "Sync",
+                "hub2": "Sync",
+                "audio": "Sync",
+                "mouse_change_channel": False,
+            },
+        )
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, [])
+        self.opener.assert_awaited_once()
+
+        logs = "\n".join(captured.output)
+        self.assertIn(f"RX /dev/test-kvm: {payload[:17]!r}", logs)
+        for line in (*report[:2], "V1P0", "V1P1"):
+            self.assertIn(f"unrecognized line: {line!r}", logs)
+        for index in range(8):
+            self.assertIn(f"ignored line: 'K50_{index} FW Ver B1.42'", logs)
+
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
         complete = asyncio.Event()

@@ -9,10 +9,13 @@ far from the current Home Assistant setup:
 - `shell_command.yaml`
 - The script with alias `KVM - request channel`
 - Dashboard channel buttons and the button labeled `Reset`
+- An email transcript of the output reported after sending `K1P0`
 
 These sources establish port configuration, outgoing command payloads,
-dashboard actions, and response-to-helper mappings. They do not include
-raw command/response captures or establish the meanings of every command.
+dashboard actions, and response-to-helper mappings. The email transcript
+also associates one response report with `K1P0`. It does not preserve raw
+bytes, timing, or serial terminators, and the meanings of every command
+are not yet established.
 
 The tables below preserve the original YAML setup as protocol evidence.
 The integration now implements the confirmed channel and Reset actions,
@@ -185,6 +188,77 @@ that reset is not established. The remaining command meanings are still
 unconfirmed; names alone do not prove a mapping to buzzer, hotkey, mouse,
 audio, hub, or other features.
 
+### Report observed after `K1P0`
+
+An old email records that the user ran uppercase `K1P0` and received the
+following output, in this order:
+
+```text
+UDP2_14AP_U3 : Version_Number - 0009 - D1223
+UDP2_14AP_DP : Version_Number - 0009 - D1223
+CH-1
+Hot KEY : CTRL
+Buzzer : ON
+HUB1 : Sync
+HUB2 : Sync
+AUDIO : Sync
+Mouse change channel : OFF
+V1P0
+V1P1
+K50_0 FW Ver B1.42
+K50_1 FW Ver B1.42
+K50_2 FW Ver B1.42
+K50_3 FW Ver B1.42
+K50_4 FW Ver B1.42
+K50_5 FW Ver B1.42
+K50_6 FW Ver B1.42
+K50_7 FW Ver B1.42
+```
+
+This report includes feedback for all seven state categories handled by
+the integration:
+
+| Reported state | Value exposed by the integration |
+| --- | --- |
+| `CH-1` | Channel: `Channel 1` |
+| `Hot KEY : CTRL` | Hotkey: `Ctrl` |
+| `Buzzer : ON` | Buzzer: on |
+| `HUB1 : Sync` | Hub 1 routing: `Sync` |
+| `HUB2 : Sync` | Hub 2 routing: `Sync` |
+| `AUDIO : Sync` | Audio routing: `Sync` |
+| `Mouse change channel : OFF` | Mouse channel switching: off |
+
+The two `UDP2_14AP_*` lines contain component identifiers and version
+strings. They are preserved as evidence without assuming that either
+identifier is the product's retail model number. The standalone `V1P0`
+and `V1P1` lines match tokens in the outgoing command catalog, but their
+meaning in this report is unknown; they are not established as echoes or
+routing-state updates. The eight `K50_*` lines match firmware messages
+already accepted by the original automation without a helper update.
+
+The integration parses the seven known state lines and logs every raw
+received byte at debug level. The component version lines and `V1P0` /
+`V1P1` are currently logged as unrecognized; they do not interrupt the
+reader or clear previously observed state. The email text is also stored
+in [the regression fixture](../tests/fixtures/k1p0_report.txt).
+
+In the original sensor automation, the two component version lines and
+`V1P0` / `V1P1` would reach the `Unhandled state value` error branch. The
+new integration keeps receiving subsequent lines after logging them.
+
+The report suggests that `K1P0` could help obtain a status snapshot. It
+does not establish that the command is a read-only query, whether it also
+changes a setting, or how it differs from `K1P1` through `K1P4`. The state
+before the command and any changes caused by it were not recorded. A
+status report could accompany a command that changes configuration.
+
+Preserve the distinction between uppercase `K1P0` in this observation and
+lowercase `k1p0` in the existing shell command definition. Case equivalence
+has not been demonstrated. The integration therefore does not send either
+variant automatically on setup or reconnection. A manual or supervised
+before/after observations are needed to establish the command's effect
+before using it for automatic state discovery.
+
 ## Dashboard and channel request behavior
 
 ### Channel buttons
@@ -328,10 +402,11 @@ The supplied configuration establishes these individual behaviors:
 - Sensor state `Buzzer : OFF` turns off `input_boolean.kvm_buzzer`.
 - Sensor state `SCROLL` selects `Scroll Lock` on `input_select.kvm_hotkey`.
 
-These examples are not a captured exchange: the sources do not establish
-which responses follow a particular command, or whether messages are
-acknowledgments, unsolicited updates, or replies to a status query.
-Response timing, ordering, and startup state discovery are also unknown.
+These examples describe the supplied automation and script logic. The
+`K1P0` email report above provides one command-associated response
+sequence, but not raw byte framing, response timing, or before/after
+device state. The meaning of `K1P0`, acknowledgment rules, and the origin
+of messages outside that report remain unknown.
 
 ## Current integration behavior
 
@@ -339,8 +414,9 @@ The integration owns the port for both reading and writing. It applies the
 serial settings on connection, reconnects after connection failures, and
 parses the confirmed feedback into native entities. It does not assume
 that a successful write means the requested state has taken effect.
-Values remain unknown until feedback arrives after connection; no startup
-or status query has been invented.
+Values remain unknown until feedback arrives after connection. The
+`K1P0` report is a candidate for future state discovery, but its effect
+has not been confirmed, so no automatic startup or status command is sent.
 
 The channel select sends `Ch1` through `Ch4`, and the Reset button sends
 `W0`. Every valid channel selection sends a command, including a selection
@@ -349,9 +425,9 @@ this allows a quick change and change back before the first response
 arrives. Other command meanings remain unconfirmed, so those features are
 observed through sensors rather than exposed as controls. The
 `connectpro.send_command` action accepts a ConnectPro `device_id` and a
-single printable ASCII command line under `data`, and appends CRLF. This provides a
-way to use known commands while collecting evidence for additional
-features.
+single printable ASCII command line under `data`, and appends CRLF. This
+provides a way to use known commands while collecting evidence for
+additional features.
 
 Debug logging records the device path, `TX`/`RX` direction, and escaped
 bytes, including line endings. Unrecognized incoming messages are logged
@@ -376,6 +452,11 @@ To complete the reference, collect:
   `input_select.kvm_hub2`.
 - The actual effect of the `Reset` button (`W0`), including which state or
   settings it changes.
-- Representative command/response captures, including startup or status
-  queries and any audio/hub modes beyond `Sync`, plus the KVM model and
-  firmware version to identify the scope of the observed behavior.
+- The documented purpose of `K1P0`, how `K1P1` through `K1P4` differ, and
+  whether uppercase and lowercase variants behave identically. A manual
+  or before/after state observations should establish whether these
+  commands change any configuration.
+- Raw command/response captures to supplement the email transcript,
+  including timing, startup/status behavior, and any audio/hub modes
+  beyond `Sync`, plus the retail KVM model and firmware version to identify
+  the scope of the observed behavior.
