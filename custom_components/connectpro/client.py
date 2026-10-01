@@ -121,12 +121,13 @@ class ConnectProClient:
                     raise OSError(str(err)) from err
                 raise
 
-    async def async_run(self) -> None:
-        """Read responses and reconnect with bounded backoff until canceled."""
+    async def async_run(self, *, initialize_state: bool = False) -> None:
+        """Read and reconnect, optionally requesting state once per connection."""
         if self._running:
             raise RuntimeError("Serial read loop is already running")
         self._running = True
         delay = RECONNECT_DELAY
+        initialized_writer: asyncio.StreamWriter | None = None
         try:
             while not self._closed.is_set():
                 if not self.connected:
@@ -148,6 +149,9 @@ class ConnectProClient:
                 if reader is None or writer is None:
                     continue
                 try:
+                    if initialize_state and writer is not initialized_writer:
+                        await self.async_send_command("k1p0")
+                        initialized_writer = writer
                     chunk = await reader.read(READ_CHUNK_SIZE)
                     if self._closed.is_set():
                         break
@@ -169,7 +173,7 @@ class ConnectProClient:
                     if self._closed.is_set():
                         break
                     _LOGGER.warning(
-                        "Serial read failed for %s: %s", self.settings.device, err
+                        "Serial read loop failed for %s: %s", self.settings.device, err
                     )
                     await self._disconnect(writer)
                     if not self._closed.is_set():

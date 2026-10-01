@@ -90,12 +90,18 @@ def test_defaults_and_legacy_serial_settings():
 
 async def test_setup_opens_one_shared_connection_and_closes_on_stop(hass):
     entry, client = make_entry(), make_client()
+
+    async def forward_platforms(entry, platforms):
+        client.async_run.assert_not_called()
+
     with (
         patch(
             "custom_components.connectpro.ConnectProClient", return_value=client
         ) as factory,
         patch.object(
-            hass.config_entries, "async_forward_entry_setups", new=AsyncMock()
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new=AsyncMock(side_effect=forward_platforms),
         ) as forward,
     ):
         assert await async_setup_entry(hass, entry)
@@ -103,8 +109,10 @@ async def test_setup_opens_one_shared_connection_and_closes_on_stop(hass):
         client.async_connect.assert_awaited_once()
         assert entry.runtime_data is client
         forward.assert_awaited_once_with(entry, PLATFORMS)
+        client.async_run.assert_called_once_with(initialize_state=True)
         hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
         await hass.async_block_till_done()
+        client.async_run.assert_awaited_once_with(initialize_state=True)
         client.async_close.assert_awaited_once()
 
 
@@ -115,6 +123,7 @@ async def test_setup_failure_releases_connection_and_requests_ha_retry(hass):
         with pytest.raises(ConfigEntryNotReady, match="port unavailable"):
             await async_setup_entry(hass, make_entry())
     client.async_close.assert_awaited_once()
+    client.async_run.assert_not_called()
 
 
 async def test_platform_setup_failure_closes_serial_port(hass):
@@ -130,6 +139,7 @@ async def test_platform_setup_failure_closes_serial_port(hass):
     ):
         await async_setup_entry(hass, make_entry())
     client.async_close.assert_awaited_once()
+    client.async_run.assert_not_called()
 
 
 @pytest.mark.parametrize("unload_ok", [True, False])

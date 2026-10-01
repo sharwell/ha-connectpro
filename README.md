@@ -66,9 +66,11 @@ these settings each time it opens the port, including after a reconnect.
 Serial settings stored by older config entries remain supported.
 
 Setup checks that the port can be opened and the settings applied. It does
-not identify the connected hardware or require a KVM handshake. To change
-the port or name later, use **Reconfigure** on the integration entry; its
-existing entities are preserved.
+not identify the connected hardware or require a KVM handshake. Once the
+entry's entities are initialized, the integration sends `k1p0` to obtain
+their current state. Serial-port checks in the setup form do not send KVM
+commands. To change the port or name later, use **Reconfigure** on the
+integration entry; its existing entities are preserved.
 
 ## Entities and actions
 
@@ -96,9 +98,15 @@ that `K1P1` switches only the first KVM to channel 1 and `K2P1`
 switches only the second in the user's two-device chain. These commands
 are available through the manual command action; the integration creates
 one device per serial connection, without separate channel entities for
-linked units. It sends no automatic startup or status query. Entities
-become unavailable on a connection failure, and the integration retries
-the connection automatically.
+linked units. The integration sends lowercase `k1p0` once when its reader
+starts on a connection, and once after each successful reconnect. Received
+status lines populate the seven state categories as they arrive; there is
+no periodic polling or optimistic state update. Entities become unavailable
+on a connection failure, and the integration retries automatically before
+requesting fresh state. The user has confirmed `k1p0` can obtain current
+entity state after initialization; the
+[protocol reference](docs/commands.md#automatic-state-initialization)
+records this separately from the earlier uppercase captures.
 
 Each channel selection sends the requested command, even when the last
 reported channel matches. This keeps rapid requests, such as switching to

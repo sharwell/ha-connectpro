@@ -23,6 +23,27 @@ ConnectProClient = client_module.ConnectProClient
 SerialSettings = client_module.SerialSettings
 
 
+def simulated_initialization_report() -> tuple[list[bytes], dict[str, str | bool]]:
+    """Reuse an uppercase K1P0 capture as simulated initialization feedback.
+
+    This does not represent a new captured lowercase k1p0 exchange.
+    """
+    capture = json.loads(
+        (Path(__file__).parent / "fixtures" / "k1p0_debug_capture.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return [event["ascii"].encode("ascii") for event in capture["rx"]], {
+        "channel": "Channel 2",
+        "hotkey": "Ctrl",
+        "buzzer": False,
+        "hub1": "Sync",
+        "hub2": "Sync",
+        "audio": "Sync",
+        "mouse_change_channel": False,
+    }
+
+
 class FakeWriter:
     """A stream writer whose drain and connection loss can be controlled."""
 
@@ -78,8 +99,10 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.async_close()
         self.opener_patch.stop()
 
-    def start_reader(self) -> asyncio.Task:
-        task = asyncio.create_task(self.client.async_run())
+    def start_reader(self, *, initialize_state: bool = False) -> asyncio.Task:
+        task = asyncio.create_task(
+            self.client.async_run(initialize_state=initialize_state)
+        )
         self.tasks.append(task)
         return task
 
@@ -99,6 +122,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             dsrdtr=False,
         )
         self.assertTrue(self.client.connected)
+        self.assertEqual(self.writer.writes, [])
         self.assertEqual(changes, [True])
         remove()
         remove()
@@ -106,9 +130,176 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.async_close()
         self.assertFalse(self.client.connected)
         self.assertEqual(self.writer.close_count, 1)
+        self.assertEqual(self.writer.writes, [])
         self.assertEqual(changes, [True])
         with self.assertRaises(ConnectionError):
             await self.client.async_connect()
+
+    async def test_initialization_queries_once_and_receives_all_observed_states(
+        self,
+    ) -> None:
+        """Opting in sends one lowercase query and awaits ordinary parsed feedback."""
+        chunks, expected = simulated_initialization_report()
+        await self.client.async_connect()
+        self.assertEqual(self.writer.writes, [])
+        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+            task = self.start_reader(initialize_state=True)
+            await asyncio.wait_for(self.writer.drain_started.wait(), 1)
+            self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
+            self.assertEqual(self.client.state, {})
+            for chunk in chunks:
+                self.reader.feed_data(chunk)
+                await asyncio.sleep(0)
+                self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
+
+        self.assertEqual(self.client.state, expected)
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.opener.assert_awaited_once()
+        messages = [record.getMessage() for record in captured.records]
+        self.assertEqual(messages.count("TX /dev/test-kvm: b'k1p0\\r\\n'"), 1)
+        self.assertEqual(
+            [
+                message
+                for message in messages
+                if message.startswith("RX /dev/test-kvm: ")
+            ],
+            [f"RX /dev/test-kvm: {chunk!r}" for chunk in chunks],
+        )
+
+    async def test_reconnect_reinitializes_once_with_fresh_observed_state(self) -> None:
+        """Each replacement connection gets one query after stale state is cleared."""
+        chunks, expected = simulated_initialization_report()
+        await self.client.async_connect()
+        next_reader = asyncio.StreamReader()
+        next_writer = FakeWriter(next_reader)
+        self.opener.return_value = next_reader, next_writer
+        backoff_started = asyncio.Event()
+        resume = asyncio.Event()
+        observed = []
+        self.client.add_listener(
+            lambda: observed.append((self.client.connected, dict(self.client.state)))
+        )
+
+        async def wait_for_reconnect(delay: float) -> None:
+            backoff_started.set()
+            await resume.wait()
+
+        with (
+            patch.object(
+                self.client, "_wait_to_reconnect", side_effect=wait_for_reconnect
+            ) as wait,
+            self.assertLogs(client_module._LOGGER, level="WARNING"),
+        ):
+            task = self.start_reader(initialize_state=True)
+            await asyncio.wait_for(self.writer.drain_started.wait(), 1)
+            for chunk in chunks:
+                self.reader.feed_data(chunk)
+                await asyncio.sleep(0)
+            self.assertEqual(self.client.state, expected)
+            self.reader.feed_eof()
+            await asyncio.wait_for(backoff_started.wait(), 1)
+            self.assertFalse(self.client.connected)
+            self.assertEqual(self.client.state, {})
+            self.assertTrue(self.writer.closed)
+            self.assertEqual(next_writer.writes, [])
+            resume.set()
+            await asyncio.wait_for(next_writer.drain_started.wait(), 1)
+            self.assertTrue(self.client.connected)
+            self.assertEqual(self.client.state, {})
+            self.assertEqual(next_writer.writes, [b"k1p0\r\n"])
+            for chunk in chunks:
+                next_reader.feed_data(chunk)
+                await asyncio.sleep(0)
+                self.assertEqual(next_writer.writes, [b"k1p0\r\n"])
+
+        wait.assert_awaited_once_with(client_module.RECONNECT_DELAY)
+        self.assertIn((False, {}), observed)
+        self.assertIn((True, {}), observed)
+        self.assertEqual(self.client.state, expected)
+        self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
+        self.assertFalse(next_writer.closed)
+        self.assertFalse(task.done())
+        self.assertEqual(self.opener.await_count, 2)
+
+    async def test_initialization_drain_failure_reconnects_and_retries_query(
+        self,
+    ) -> None:
+        """A failed initial write closes its port before retrying on a fresh connection."""
+        chunks, expected = simulated_initialization_report()
+        await self.client.async_connect()
+        self.writer.drain_error = client_module.SerialException("initial query failed")
+        next_reader = asyncio.StreamReader()
+        next_writer = FakeWriter(next_reader)
+        self.opener.return_value = next_reader, next_writer
+        backoff_started = asyncio.Event()
+        resume = asyncio.Event()
+
+        async def wait_for_reconnect(delay: float) -> None:
+            backoff_started.set()
+            await resume.wait()
+
+        with (
+            patch.object(
+                self.client, "_wait_to_reconnect", side_effect=wait_for_reconnect
+            ) as wait,
+            self.assertLogs(client_module._LOGGER, level="WARNING"),
+        ):
+            task = self.start_reader(initialize_state=True)
+            await asyncio.wait_for(backoff_started.wait(), 1)
+            self.assertTrue(self.writer.closed)
+            self.assertFalse(self.client.connected)
+            self.assertEqual(self.client.state, {})
+            self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
+            self.assertEqual(next_writer.writes, [])
+            self.opener.assert_awaited_once()
+            resume.set()
+            await asyncio.wait_for(next_writer.drain_started.wait(), 1)
+            self.assertEqual(next_writer.writes, [b"k1p0\r\n"])
+            self.assertEqual(self.client.state, {})
+            for chunk in chunks:
+                next_reader.feed_data(chunk)
+                await asyncio.sleep(0)
+
+        wait.assert_awaited_once_with(client_module.RECONNECT_DELAY)
+        self.assertEqual(self.client.state, expected)
+        self.assertTrue(self.client.connected)
+        self.assertFalse(next_writer.closed)
+        self.assertFalse(task.done())
+        self.assertEqual(next_writer.writes, [b"k1p0\r\n"])
+        self.assertEqual(self.opener.await_count, 2)
+
+    async def test_cancel_during_initialization_drain_closes_port(self) -> None:
+        """Unloading during a blocked initial query cannot leak the serial port."""
+        await self.client.async_connect()
+        self.writer.drain_gate = asyncio.Event()
+        task = self.start_reader(initialize_state=True)
+        await asyncio.wait_for(self.writer.drain_started.wait(), 1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        self.assertTrue(self.writer.closed)
+        self.assertFalse(self.client.connected)
+        self.assertEqual(self.client.state, {})
+        self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
+        self.opener.assert_awaited_once()
+
+    async def test_close_during_initialization_drain_does_not_reopen_or_query(
+        self,
+    ) -> None:
+        """Closing a pending initial query does not send another query afterward."""
+        await self.client.async_connect()
+        self.writer.drain_gate = asyncio.Event()
+        task = self.start_reader(initialize_state=True)
+        await asyncio.wait_for(self.writer.drain_started.wait(), 1)
+        await self.client.async_close()
+        self.writer.drain_gate.set()
+        await asyncio.wait_for(task, 1)
+        self.assertTrue(self.writer.closed)
+        self.assertFalse(self.client.connected)
+        self.assertEqual(self.client.state, {})
+        self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
+        self.opener.assert_awaited_once()
 
     async def test_fragmented_input_unknown_bytes_and_raw_logging(self) -> None:
         await self.client.async_connect()

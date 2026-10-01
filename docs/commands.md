@@ -24,6 +24,9 @@ far from the current Home Assistant setup:
 - A captured sequence of lowercase hotkey commands and lowercase/uppercase
   mouse channel-switching commands on 2026-10-01, with physical verification
   of both features and their effect on both linked KVMs
+- The user's confirmation on 2026-10-01 that lowercase `k1p0` can obtain
+  current entity state after loading, configuring, and initializing the
+  integration
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -274,19 +277,17 @@ In the original sensor automation, the two component version lines and
 `V1P0` / `V1P1` would reach the `Unhandled state value` error branch. The
 new integration keeps receiving subsequent lines after logging them.
 
-The report suggests that `K1P0` could help obtain a status snapshot. It
-does not establish that the command is a read-only query or whether it also
-changes a setting. The state before the command and any changes caused
-by it were not recorded. A status report could accompany a command that
-changes configuration. The later test below separately establishes the
-channel-selection effect of `K1P1` in this installation.
+The email associates `K1P0` with the seven recognized state categories,
+but does not record raw bytes or before/after observations. Later captures
+preserve its status output, and the user subsequently confirmed lowercase
+`k1p0` can obtain current entity state after initialization. The targeted
+channel test below separately establishes `K1P1` channel-selection behavior.
 
-Preserve the distinction between uppercase `K1P0` in this observation and
-lowercase `k1p0` in the existing shell command definition. Case equivalence
-has not been demonstrated. The integration therefore does not send either
-variant automatically on setup or reconnection. A manual or supervised
-before/after observations are needed to establish the command's effect
-before using it for automatic state discovery.
+Preserve uppercase `K1P0` in this historical observation and lowercase
+`k1p0` in the existing shell command definition. The later user confirmation
+supports using the lowercase command for
+[automatic state initialization](#automatic-state-initialization); no new
+raw lowercase status exchange was supplied with that confirmation.
 
 ### Debug capture after `K1P0`
 
@@ -352,7 +353,8 @@ each unit's state.
 
 This capture confirms another report following uppercase `K1P0`, but does
 not record state before the command or establish that it is read-only.
-Lowercase equivalence and automatic state discovery remain unconfirmed.
+The later user confirmation establishes lowercase `k1p0` as a way to
+obtain current entity state; this earlier capture itself tests uppercase.
 
 ### Targeted channel switching in a two-KVM chain
 
@@ -589,6 +591,37 @@ two mouse changes. The repeated off/on mouse replies are parsed without
 duplicate notifications. The connection remains open and no extra commands
 are sent. Timestamps describe the host log, not response deadlines.
 
+### Automatic state initialization
+
+The user confirmed that lowercase `k1p0` can obtain current state for the
+entities after the integration is loaded, configured, and initialized.
+This confirmation is separate from the earlier raw uppercase `K1P0`
+captures; no new raw exchange accompanies it.
+
+The integration opens and configures the serial port, initializes the
+entity platforms, then starts its reader and sends `b'k1p0\r\n'` once on
+that connection. It sends the same request once after each successful
+reconnect, since disconnecting clears previously observed state. Temporary
+serial-port checks in the configuration flow only open and close the port;
+they do not send a status request or other KVM commands.
+
+The request uses the normal serialized command path and TX logging. The
+reply uses normal RX logging, line framing, and parsing. Each recognized
+line supplies its observed state; a write alone does not populate entities.
+Initialization does not wait for a complete status handshake or poll
+periodically. If the write fails, the reader uses the existing bounded
+reconnect backoff and requests state on the replacement connection.
+
+The status response is consistent with the first/local KVM and does not
+create per-unit state for a chain. `K2P0` returned `ERROR` in the supplied
+capture and is not sent automatically. Component versions, video tokens,
+and firmware diagnostics continue through the normal logging behavior.
+
+Lifecycle tests verify the initial request, received state, reconnect
+refresh, write-failure recovery, and shutdown. They reuse existing captured
+status bytes as a simulated initialization response, without claiming a
+new hardware capture of lowercase `k1p0`.
+
 ## Dashboard and channel request behavior
 
 ### Channel buttons
@@ -757,9 +790,12 @@ parses the confirmed feedback into native entities. It does not assume
 that a successful write means the requested state has taken effect.
 Values remain unknown until feedback arrives after connection. The
 manual `K1P0` reports update the recognized state categories; the tested
-channel value is consistent with the first/local KVM. Side effects and
-downstream status retrieval remain unconfirmed, and no automatic startup
-or status command is sent.
+channel value is consistent with the first/local KVM. The integration now
+sends lowercase `k1p0` once after initialization on each runtime connection,
+including reconnects, using the user's confirmation above. Status lines
+populate entities through the same parser as unsolicited feedback.
+Downstream status retrieval remains unconfirmed, and there is no periodic
+status polling.
 
 The channel select sends `Ch1` through `Ch4`, and the Reset displays button
 sends `W0`. The button retains its existing `reset` entity key and unique
@@ -818,8 +854,9 @@ To complete the reference, collect:
   installation are now recorded; KVM settings changes are not established.
 - Any side effects of `K1P0` beyond returning the observed status report.
   The `K1P1` and `K2P1` channel-selection effects are observed in this
-  installation, but other ports/levels and lowercase equivalence still
-  need confirmation.
+  installation, but other ports/levels and lowercase equivalence of those
+  selection commands still need confirmation. The user has confirmed
+  lowercase `k1p0` for current-state initialization.
 - Whether another command can retrieve downstream status, how those
   responses return to the host, and which unit produced the `K2P0` error.
 - Isolated before/after verification of buzzer control on each linked KVM

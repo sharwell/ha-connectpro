@@ -111,7 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConnectProConfigEntry) -
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         entry.async_create_background_task(
-            hass, client.async_run(), "ConnectPro reader"
+            hass, client.async_run(initialize_state=True), "ConnectPro reader"
         )
 
         async def async_stop(event: Event) -> None:
