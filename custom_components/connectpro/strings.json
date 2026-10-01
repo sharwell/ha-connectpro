@@ -39,6 +39,11 @@
         "name": "Reset displays"
       }
     },
+    "switch": {
+      "buzzer": {
+        "name": "Buzzer"
+      }
+    },
     "binary_sensor": {
       "buzzer": {
         "name": "Buzzer"

@@ -35,7 +35,13 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.SELECT, Platform.BUTTON, Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS = [
+    Platform.SELECT,
+    Platform.BUTTON,
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 type ConnectProConfigEntry = ConfigEntry[ConnectProClient]
 

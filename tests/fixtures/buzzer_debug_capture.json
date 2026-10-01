@@ -1,0 +1,49 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "user_report": {
+    "statement": "The commands BZOFF and BZON appear to change the buzzer.",
+    "audible_observation": "The user heard the buzzer.",
+    "chain_observation": "The commands appear to affect both connected KVMs.",
+    "scope": "No isolated per-device verification was supplied."
+  },
+  "case_observations": "The captured commands are bzon, BZON, and BZOFF. This capture does not establish how bzoff or other case variants behave.",
+  "events": [
+    {
+      "direction": "TX",
+      "time": "11:43:56.563",
+      "ascii": "bzon\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:43:56.583",
+      "ascii": "BZON\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:44:03.932",
+      "ascii": "BZON\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:44:03.966",
+      "ascii": "B"
+    },
+    {
+      "direction": "RX",
+      "time": "11:44:03.968",
+      "ascii": "ZON\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "11:44:24.229",
+      "ascii": "BZOFF\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "11:44:24.251",
+      "ascii": "BZOFF\r\n"
+    }
+  ]
+}

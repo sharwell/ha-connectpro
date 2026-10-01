@@ -29,6 +29,11 @@ async def async_setup_entry(
 class ConnectProBinarySensor(ConnectProEntity, BinarySensorEntity):
     """A read-only boolean setting reported by the KVM."""
 
+    def __init__(self, entry: ConnectProConfigEntry, key: str) -> None:
+        """Keep legacy buzzer identity while preferring its new control."""
+        super().__init__(entry, key)
+        self._attr_entity_registry_enabled_default = key != "buzzer"
+
     @property
     def is_on(self) -> bool | None:
         """Return the last reported setting, or unknown until observed."""

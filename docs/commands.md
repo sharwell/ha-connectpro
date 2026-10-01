@@ -18,6 +18,9 @@ far from the current Home Assistant setup:
   press on 2026-10-01, plus a separate captured `K2P0` / `ERROR` exchange
 - A captured `W0` exchange on 2026-10-01 and the user's observation that
   all displays cycled off and on; later channel feedback was unrelated
+- A captured `bzon`, `BZON`, and `BZOFF` sequence on 2026-10-01, with
+  matching `BZON` / `BZOFF` feedback, audible buzzer confirmation, and
+  the user's qualified report that the commands appear to affect both KVMs
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -30,7 +33,8 @@ which physical KVM changed channel. The meanings of every command are not
 yet established.
 
 The tables below preserve the original YAML setup as protocol evidence.
-The integration now implements channel selection and the `W0` display action,
+The integration now implements channel selection, buzzer control, and the
+`W0` display action,
 receives the listed state feedback into native entities, and offers a
 generic command action. See the [README](../README.md) for installation,
 migration, and logging instructions. The old helpers and shell actions are
@@ -201,9 +205,12 @@ selection commands. The dashboard labels `W0` as `Reset`; a later capture
 and physical observation below associate it with displays cycling off
 and on and the reply `Wake-Up : DP-ALL`. The targeted channel test below
 establishes effects for uppercase `K1P1` and `K2P1` in one two-KVM chain;
-it does not verify every lowercase sender above. Other command meanings
-remain unconfirmed on this hardware; names alone do not prove a mapping
-to buzzer, hotkey, mouse, audio, hub, or other features.
+it does not verify every lowercase sender above. A subsequent buzzer
+capture confirms `bzon` and `BZON` receiving `BZON`, and `BZOFF`
+receiving `BZOFF`. The lowercase `bzoff` sender remains untested in these
+captures. Other command meanings remain unconfirmed on this hardware;
+names alone do not prove a mapping to hotkey, mouse, audio, hub, or other
+features.
 
 ### Report observed after `K1P0`
 
@@ -500,6 +507,39 @@ unrecognized-line diagnostic after the full line arrives, later channel
 updates to `Channel 1` and `Channel 2`, continued connection, and no extra
 commands. The response is not treated as a persistent display-power state.
 
+### Debug capture after buzzer commands
+
+On 2026-10-01 the user sent lowercase `bzon`, uppercase `BZON`, then
+uppercase `BZOFF` through the integration. They heard the buzzer and
+reported that the commands appear to affect both linked KVMs. The
+[capture fixture](../tests/fixtures/buzzer_debug_capture.json) preserves
+all seven ordered raw TX/RX events and their read boundaries:
+
+| Command | TX timestamp | Received output |
+| --- | --- | --- |
+| `bzon` | `11:43:56.563` | `BZON\r\n` at `11:43:56.583` |
+| `BZON` | `11:44:03.932` | `B` at `11:44:03.966`, then `ZON\r\n` at `11:44:03.968` |
+| `BZOFF` | `11:44:24.229` | `BZOFF\r\n` at `11:44:24.251` |
+
+These replies use the buzzer state strings already handled by the
+original automation and integration. They report on, on again, then off.
+The native Buzzer switch uses uppercase `BZON` and `BZOFF`, since both
+were tested. The on-command variants produced identical normalized
+feedback, but this does not establish general case insensitivity,
+lowercase `bzoff` equivalence, or command behavior on other firmware.
+The host log does not identify which unit emitted the replies. The user's
+observation suggests a chain-wide effect in this installation, but does
+not supply isolated per-unit verification or establish the scope in
+other chain topologies.
+
+The reader waits for the complete split `BZON` line before processing it.
+Neither an outgoing command nor the partial `B` changes observed state.
+Repeated complete `BZON` feedback retains on without creating a second
+state-change notification; `BZOFF` changes the observed state to off.
+The replay regression verifies the three exact writes, four raw reads,
+complete-line parsing, state changes, continued connection, and no extra
+commands. Captured host timestamps do not establish response deadlines.
+
 ## Dashboard and channel request behavior
 
 ### Channel buttons
@@ -560,15 +600,17 @@ case. The stock serial sensor strips leading and trailing whitespace
 before publishing its state, as described above. The configured sensor
 has no additional value template. These are processed sensor state
 strings. The later debug captures establish CRLF response terminators for
-the supplied `K1P0`, targeted-channel, and `W0` exchanges; framing for
+the supplied `K1P0`, targeted-channel, `W0`, and buzzer exchanges; framing for
 other commands and hardware configurations remains unverified.
 
 For select helpers, the automation calls `input_select.select_option` with
 the exact option shown below. For boolean helpers, it calls
 `input_boolean.turn_on` or `input_boolean.turn_off` as indicated. These
 helpers belong to the original hand-rolled setup. The integration exposes
-a native channel select, sensors for hotkey/audio/hub modes, and binary
-sensors for the two on/off states instead of writing these helpers.
+a native channel select, a buzzer switch, sensors for hotkey/audio/hub
+modes, and a mouse channel-switching binary sensor instead of writing
+these helpers. The read-only buzzer binary sensor is retained for existing
+installations and disabled by default when newly registered.
 
 ### Channel updates
 
@@ -673,6 +715,14 @@ The channel select sends `Ch1` through `Ch4`, and the Reset displays button
 sends `W0`. The button retains its existing `reset` entity key and unique
 ID; changing its display name does not create a replacement entity. Its
 `Wake-Up : DP-ALL` reply is debug logged without fabricating state.
+The Buzzer switch sends `BZON` or `BZOFF` on every on/off request, including
+requests matching the last observed state. Its state remains unknown until
+buzzer feedback arrives and changes only from recognized feedback. It uses
+the same observed `buzzer` state as the retained read-only binary sensor;
+the latter is disabled by default for newly registered entities. Existing
+registry enablement is preserved. Neither the switch nor the binary
+sensor claims separate state for each linked KVM.
+
 Every valid channel selection sends a command, including a selection
 that matches the last observed channel. Unlike the old script's guard,
 this allows a quick change and change back before the first response
@@ -720,6 +770,10 @@ To complete the reference, collect:
   need confirmation.
 - Whether another command can retrieve downstream status, how those
   responses return to the host, and which unit produced the `K2P0` error.
+- Isolated before/after verification of buzzer control on each linked KVM
+  and other chain topologies. The user heard the buzzer and reported that
+  commands appear to affect both units; the reply origin and general
+  chain scope remain unconfirmed. Lowercase `bzoff` is untested.
 - A serial `Ch1` comparison with linked units initially on different
   channels, to establish its synchronized-switching scope separately from
   physical button behavior. Per-unit state feedback and response origins

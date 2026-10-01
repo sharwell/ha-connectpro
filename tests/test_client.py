@@ -614,6 +614,78 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(messages.count(unknown_message), 1)
 
+    async def test_buzzer_capture_waits_for_confirmed_state(self) -> None:
+        """Buzzer commands await complete replies and duplicate replies add no update."""
+        capture = json.loads(
+            (
+                Path(__file__).parent / "fixtures" / "buzzer_debug_capture.json"
+            ).read_text(encoding="utf-8")
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        self.assertEqual(
+            events,
+            [
+                ("TX", b"bzon\r\n"),
+                ("RX", b"BZON\r\n"),
+                ("TX", b"BZON\r\n"),
+                ("RX", b"B"),
+                ("RX", b"ZON\r\n"),
+                ("TX", b"BZOFF\r\n"),
+                ("RX", b"BZOFF\r\n"),
+            ],
+        )
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_parse_counts = [0, 1, 1, 1, 2, 2, 3]
+        expected_update_counts = [0, 1, 1, 1, 1, 1, 2]
+        expected_values = [None, True, True, True, True, True, False]
+        expected_writes = []
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            task = self.start_reader()
+            for index, (direction, payload) in enumerate(events):
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                    expected_writes.append(payload)
+                else:
+                    self.reader.feed_data(payload)
+                # Preserve read boundaries without waiting for recorded times.
+                await asyncio.sleep(0)
+                self.assertEqual(parse.call_count, expected_parse_counts[index])
+                self.assertEqual(len(observed), expected_update_counts[index])
+                self.assertEqual(
+                    self.client.state,
+                    {} if index == 0 else {"buzzer": expected_values[index]},
+                )
+                self.assertEqual(self.writer.writes, expected_writes)
+
+        self.assertEqual(
+            [call.args[0] for call in parse.call_args_list], ["BZON", "BZON", "BZOFF"]
+        )
+        self.assertEqual(observed, [{"buzzer": True}, {"buzzer": False}])
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, [b"bzon\r\n", b"BZON\r\n", b"BZOFF\r\n"])
+        self.opener.assert_awaited_once()
+        self.assertEqual(
+            [record.getMessage() for record in captured.records],
+            [
+                f"{direction} /dev/test-kvm: {payload!r}"
+                for direction, payload in events
+            ],
+        )
+
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
         complete = asyncio.Event()

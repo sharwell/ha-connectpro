@@ -7,7 +7,7 @@ longer needed.
 
 This is an initial implementation based on the existing installation's
 commands and response mappings. User-provided captures from physical
-hardware confirm manual status, targeted channel, and `W0` exchanges
+hardware confirm manual status, targeted channel, buzzer, and `W0` exchanges
 through the integration. The user observed `W0` cycling all displays off
 and on. The native `Ch1` through `Ch4` controls, recovery, and other
 hardware configurations still need hardware verification. The
@@ -77,13 +77,17 @@ existing entities are preserved.
 | Reset displays button | Sends `W0`, matching the previous dashboard's Reset action. The user observed all displays cycling off and on; the captured reply is `Wake-Up : DP-ALL`. |
 | Hotkey sensor | Reports `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock` from recognized feedback. |
 | Audio, Hub 1, and Hub 2 sensors | Report the confirmed `Sync` feedback. Other modes need protocol evidence. |
-| Buzzer binary sensor | Reports the received on/off state. |
+| Buzzer switch | Sends `BZON` or `BZOFF`; reports the received on/off state. |
 | Mouse change channel binary sensor | Reports the received on/off state. |
 
-The sensors describe observed state. Their corresponding controls are not
-exposed until the command meanings are confirmed. State remains unknown
-until the relevant feedback arrives; sending a command does not establish
-that it succeeded. Repeated captures show `K1P0` producing a report
+The switch, channel select, and sensors describe observed state. Other
+settings remain read-only until their commands are confirmed. State
+remains unknown until the relevant feedback arrives; sending a command
+does not establish that it succeeded. The read-only Buzzer binary sensor
+remains available for existing installations, but is disabled by default
+for new installations because the switch also reports its state.
+
+Repeated captures show `K1P0` producing a report
 containing all seven known state categories. After `K1P1`, this report
 contains `CH-1`, consistent with the first/local KVM's channel. Possible
 effects on other settings remain unconfirmed. Observations also confirm
@@ -98,10 +102,12 @@ the connection automatically.
 Each channel selection sends the requested command, even when the last
 reported channel matches. This keeps rapid requests, such as switching to
 Channel 3 and back to Channel 2 before feedback arrives, from being lost.
+The buzzer switch also sends each on/off request, including requests that
+match the last reported state, and waits for feedback before changing state.
 
-Use the entities on the integration's device page to select a channel or
-press Reset displays. In an automation, replace the example entity IDs below with
-the ones created in your installation:
+Use the entities on the integration's device page to select a channel,
+control the buzzer, or press Reset displays. In an automation, replace the
+example entity IDs below with the ones created in your installation:
 
 ```yaml
 action: select.select_option
@@ -115,6 +121,12 @@ data:
 action: button.press
 target:
   entity_id: button.your_kvm_reset
+```
+
+```yaml
+action: switch.turn_off
+target:
+  entity_id: switch.your_kvm_buzzer
 ```
 
 For a command already known to work with your device, use the
@@ -155,6 +167,14 @@ named **Reset displays** to describe this effect. Its existing unique ID
 is preserved, and it still sends exactly `W0`. This reply does not update
 the integration's observed state. Later `CH1` / `CH2` messages in the log
 were unrelated channel feedback, as confirmed by the user.
+
+The [buzzer capture](docs/commands.md#debug-capture-after-buzzer-commands)
+shows both `bzon` and `BZON` receiving `BZON`, and `BZOFF` receiving
+`BZOFF`. The native switch uses the tested uppercase commands. These
+responses update its state; it does not assume that a write succeeded.
+The user heard the buzzer and reported that the commands appear to affect
+both linked KVMs. The integration reports the feedback received on the
+connection rather than separate buzzer states for each unit.
 
 ## Debugging serial communication
 

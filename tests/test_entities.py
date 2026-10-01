@@ -11,13 +11,21 @@ from unittest.mock import Mock, patch
 import pytest
 import pytest_asyncio
 
-from custom_components.connectpro import binary_sensor, button, select, sensor
+from custom_components.connectpro import (
+    PLATFORMS,
+    binary_sensor,
+    button,
+    select,
+    sensor,
+    switch,
+)
 from custom_components.connectpro.binary_sensor import ConnectProBinarySensor
 from custom_components.connectpro.button import ConnectProResetButton
 from custom_components.connectpro.const import DOMAIN
 from custom_components.connectpro.select import ConnectProChannelSelect
 from custom_components.connectpro.sensor import ConnectProSensor
-from homeassistant.const import EntityCategory
+from custom_components.connectpro.switch import ConnectProBuzzerSwitch
+from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
@@ -159,6 +167,83 @@ async def test_reset_button_sends_exact_command(
     assert entity.device_class is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_state", [None, False, True])
+@pytest.mark.parametrize(
+    ("action", "command", "reported_state"),
+    [("async_turn_on", "BZON", True), ("async_turn_off", "BZOFF", False)],
+)
+async def test_buzzer_switch_waits_for_feedback_even_when_request_matches_state(
+    entry: SimpleNamespace,
+    client: FakeClient,
+    initial_state: bool | None,
+    action: str,
+    command: str,
+    reported_state: bool,
+) -> None:
+    """Every request sends its command; only received state changes the switch."""
+    if initial_state is not None:
+        client.state["buzzer"] = initial_state
+    entity = ConnectProBuzzerSwitch(entry)
+    assert entity.is_on is initial_state
+
+    await getattr(entity, action)()
+
+    assert client.commands == [command]
+    assert entity.is_on is initial_state
+    client.state["buzzer"] = reported_state
+    assert entity.is_on is reported_state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["async_turn_on", "async_turn_off"])
+@pytest.mark.parametrize(
+    ("error", "expected_type"),
+    [
+        (ConnectionError("disconnected"), HomeAssistantError),
+        (OSError("write failed"), HomeAssistantError),
+        (TimeoutError("write timed out"), HomeAssistantError),
+        (ValueError("invalid command"), ServiceValidationError),
+    ],
+)
+async def test_buzzer_switch_surfaces_command_failures_without_changing_state(
+    entry: SimpleNamespace,
+    client: FakeClient,
+    action: str,
+    error: Exception,
+    expected_type: type[HomeAssistantError],
+) -> None:
+    """A failed switch request preserves observed state and reaches the caller."""
+    client.state["buzzer"] = False
+    client.send_error = error
+    entity = ConnectProBuzzerSwitch(entry)
+
+    with pytest.raises(expected_type, match=str(error)) as raised:
+        await getattr(entity, action)()
+
+    assert raised.value.__cause__ is error
+    assert entity.is_on is False
+    assert client.commands == []
+
+
+def test_buzzer_control_preserves_legacy_sensor_identity_and_registration_defaults(
+    entry: SimpleNamespace,
+) -> None:
+    """The new control coexists with the existing sensor without changing its ID."""
+    control = ConnectProBuzzerSwitch(entry)
+    legacy = ConnectProBinarySensor(entry, "buzzer")
+    mouse = ConnectProBinarySensor(entry, "mouse_change_channel")
+
+    assert control.unique_id == legacy.unique_id == "entry-1_buzzer"
+    assert control.translation_key == legacy.translation_key == "buzzer"
+    assert control.entity_category is EntityCategory.CONFIG
+    assert control.entity_registry_enabled_default is True
+    assert control.device_class is None
+    assert legacy.entity_category is None
+    assert legacy.entity_registry_enabled_default is False
+    assert mouse.entity_registry_enabled_default is True
+
+
 @pytest.mark.parametrize("key", ["buzzer", "mouse_change_channel"])
 def test_binary_sensors_distinguish_unknown_off_and_on(
     entry: SimpleNamespace, client: FakeClient, key: str
@@ -200,25 +285,44 @@ async def test_platforms_share_device_identity_and_connection_availability(
     hass: HomeAssistant, entry: SimpleNamespace, client: FakeClient
 ) -> None:
     """Every platform adds the expected entities for one KVM device."""
-    entities = []
-    for platform in (select, button, binary_sensor, sensor):
-        await platform.async_setup_entry(hass, entry, entities.extend)
+    platforms = {
+        Platform.SELECT: select,
+        Platform.BUTTON: button,
+        Platform.BINARY_SENSOR: binary_sensor,
+        Platform.SENSOR: sensor,
+        Platform.SWITCH: switch,
+    }
+    assert set(PLATFORMS) == set(platforms)
+    entities_by_platform = {}
+    for domain, platform in platforms.items():
+        entities_by_platform[domain] = []
+        await platform.async_setup_entry(
+            hass, entry, entities_by_platform[domain].extend
+        )
 
-    keys = {
-        "channel",
-        "reset",
-        "buzzer",
-        "mouse_change_channel",
-        "hotkey",
-        "audio",
-        "hub1",
-        "hub2",
+    expected_keys = {
+        Platform.SELECT: {"channel"},
+        Platform.BUTTON: {"reset"},
+        Platform.BINARY_SENSOR: {"buzzer", "mouse_change_channel"},
+        Platform.SENSOR: {"hotkey", "audio", "hub1", "hub2"},
+        Platform.SWITCH: {"buzzer"},
     }
-    assert len(entities) == len(keys)
-    assert {entity.translation_key for entity in entities} == keys
-    assert {entity.unique_id for entity in entities} == {
-        f"entry-1_{key}" for key in keys
-    }
+    identities = []
+    for domain, platform_entities in entities_by_platform.items():
+        assert len(platform_entities) == len(expected_keys[domain])
+        assert {
+            entity.translation_key for entity in platform_entities
+        } == expected_keys[domain]
+        assert {entity.unique_id for entity in platform_entities} == {
+            f"entry-1_{key}" for key in expected_keys[domain]
+        }
+        identities.extend((domain, entity.unique_id) for entity in platform_entities)
+    assert len(set(identities)) == len(identities)
+    entities = [
+        entity
+        for platform_entities in entities_by_platform.values()
+        for entity in platform_entities
+    ]
     for entity in entities:
         assert entity.has_entity_name is True
         assert entity.should_poll is False
@@ -244,22 +348,32 @@ def test_device_name_falls_back_when_entry_title_is_empty(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entity_type", "entity_id"),
+    [
+        (ConnectProChannelSelect, "select.connectpro_channel"),
+        (ConnectProBuzzerSwitch, "switch.connectpro_buzzer"),
+    ],
+)
 async def test_entity_listener_updates_state_and_unsubscribes_on_removal(
-    hass: HomeAssistant, entry: SimpleNamespace, client: FakeClient
+    hass: HomeAssistant,
+    entry: SimpleNamespace,
+    client: FakeClient,
+    entity_type: type,
+    entity_id: str,
 ) -> None:
     """Serial updates publish state only while the entity is registered."""
-    entity = ConnectProChannelSelect(entry)
+    entity = entity_type(entry)
     entity.hass = hass
-    entity.entity_id = "select.connectpro_channel"
+    entity.entity_id = entity_id
     assert client.listeners == []
 
     with patch.object(entity, "async_write_ha_state", new=Mock()) as write_state:
         await entity.async_added_to_hass()
         assert len(client.listeners) == 1
 
-        client.state["channel"] = "Channel 3"
+        client.state.update({"channel": "Channel 3", "buzzer": True})
         client.notify()
-        assert entity.current_option == "Channel 3"
         write_state.assert_called_once_with()
 
         client.connected = False
