@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from . import ConnectProConfigEntry
 
-SENSOR_KEYS = ("audio", "hub1", "hub2")
+SENSOR_KEYS = ("audio", "hub1", "hub2", "video1")
 
 
 async def async_setup_entry(

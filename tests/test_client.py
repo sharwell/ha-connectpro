@@ -987,6 +987,120 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_routing_capture_preserves_state_until_complete_feedback(
+        self,
+    ) -> None:
+        """Routing replies update only their observed states; ERROR changes nothing."""
+        capture = json.loads(
+            (
+                Path(__file__).parent / "fixtures" / "routing_debug_capture.json"
+            ).read_text(encoding="utf-8")
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        expected_commands = [
+            b"h1p2\r\n",
+            b"h1p0\r\n",
+            b"h0p0\r\n",
+            b"v1p2\r\n",
+            b"v0p0\r\n",
+            b"v1p0\r\n",
+        ]
+        self.assertEqual(len(events), 20)
+        self.assertEqual(sum(direction == "RX" for direction, _ in events), 14)
+        self.assertEqual(
+            [payload for direction, payload in events if direction == "TX"],
+            expected_commands,
+        )
+        expected_lines = [
+            "HUB1 : Async-> Channel 2",
+            "ERROR",
+            "HUB1 : Sync",
+            "HUB2 : Sync",
+            "Video1 : ASYNC-mode-Port2",
+            "Video-ALL : SYNC-mode",
+            "Video1 : SYNC-mode",
+        ]
+        hub1_async = {"hub1": "Channel 2"}
+        hub1_sync = {"hub1": "Sync"}
+        both_hubs_sync = {"hub1": "Sync", "hub2": "Sync"}
+        video_async = both_hubs_sync | {"video1": "Channel 2"}
+        video_sync = both_hubs_sync | {"video1": "Sync"}
+        states_by_complete_lines = [
+            {},
+            hub1_async,
+            hub1_async,
+            hub1_sync,
+            both_hubs_sync,
+            video_async,
+            video_sync,
+            video_sync,
+        ]
+        update_counts_by_complete_lines = [0, 1, 1, 2, 3, 4, 5, 5]
+        self.client = ConnectProClient(SerialSettings(capture["device"]))
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_writes = []
+        received = bytearray()
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            # Manual capture replay must not add an automatic initialization query.
+            task = self.start_reader(initialize_state=False)
+            for direction, payload in events:
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                    expected_writes.append(payload)
+                else:
+                    self.reader.feed_data(payload)
+                    received.extend(payload)
+                await asyncio.sleep(0)
+                complete_lines = received.count(b"\r\n")
+                self.assertEqual(parse.call_count, complete_lines)
+                self.assertEqual(
+                    [call.args[0] for call in parse.call_args_list],
+                    expected_lines[:complete_lines],
+                )
+                self.assertEqual(
+                    self.client.state, states_by_complete_lines[complete_lines]
+                )
+                self.assertEqual(
+                    len(observed), update_counts_by_complete_lines[complete_lines]
+                )
+                self.assertEqual(self.writer.writes, expected_writes)
+
+        self.assertEqual(parse.call_count, 7)
+        self.assertEqual(
+            observed, [hub1_async, hub1_sync, both_hubs_sync, video_async, video_sync]
+        )
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, expected_commands)
+        self.opener.assert_awaited_once()
+        messages = [record.getMessage() for record in captured.records]
+        path = capture["device"]
+        self.assertEqual(
+            [
+                message
+                for message in messages
+                if message.startswith((f"TX {path}: ", f"RX {path}: "))
+            ],
+            [f"{direction} {path}: {payload!r}" for direction, payload in events],
+        )
+        self.assertEqual(
+            [message for message in messages if "unrecognized line" in message],
+            [f"RX {path} unrecognized line: 'ERROR'"],
+        )
+
     async def test_overlong_input_does_not_create_false_state(self) -> None:
         await self.client.async_connect()
         complete = asyncio.Event()

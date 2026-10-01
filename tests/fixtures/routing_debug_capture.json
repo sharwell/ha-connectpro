@@ -1,0 +1,114 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "device": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0",
+  "user_observations": {
+    "hub1_routing": "h1p2 assigned Hub1 on both linked KVMs to machine 2 independently of the current channel.",
+    "hub_sync": "h0p0 returned both hubs to Sync.",
+    "video_routing": "The user subsequently verified that v1p2 pinned Video 1 to machine 2 on both linked KVMs, and v1p0 restored only Video 1 to Sync while leaving another pinned video output unchanged."
+  },
+  "evidence_scope": "h1p0 received ERROR. Only the exact recorded commands and responses are established by this capture; other ports, units, and command case variants are not inferred.",
+  "events": [
+    {
+      "direction": "TX",
+      "time": "12:14:27.260",
+      "ascii": "h1p2\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:14:27.291",
+      "ascii": "HUB1"
+    },
+    {
+      "direction": "RX",
+      "time": "12:14:27.294",
+      "ascii": " : Async-> C"
+    },
+    {
+      "direction": "RX",
+      "time": "12:14:27.296",
+      "ascii": "hannel 2\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:15:37.241",
+      "ascii": "h1p0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:15:37.249",
+      "ascii": "ERROR\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:15:43.736",
+      "ascii": "h0p0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:15:43.807",
+      "ascii": "HUB1 : Sync\r\nHUB2 : Sync\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:18:14.604",
+      "ascii": "v1p2\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:18:14.749",
+      "ascii": "Video1 : "
+    },
+    {
+      "direction": "RX",
+      "time": "12:18:14.750",
+      "ascii": "ASYNC-mode-P"
+    },
+    {
+      "direction": "RX",
+      "time": "12:18:14.753",
+      "ascii": "ort2\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:19:00.481",
+      "ascii": "v0p0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:19:00.532",
+      "ascii": "Video-ALL"
+    },
+    {
+      "direction": "RX",
+      "time": "12:19:00.534",
+      "ascii": " : SYNC-mode"
+    },
+    {
+      "direction": "RX",
+      "time": "12:19:00.536",
+      "ascii": "\r\n"
+    },
+    {
+      "direction": "TX",
+      "time": "12:20:12.449",
+      "ascii": "v1p0\r\n"
+    },
+    {
+      "direction": "RX",
+      "time": "12:20:12.494",
+      "ascii": "Video1"
+    },
+    {
+      "direction": "RX",
+      "time": "12:20:12.496",
+      "ascii": " : SYNC-mod"
+    },
+    {
+      "direction": "RX",
+      "time": "12:20:12.497",
+      "ascii": "e\r\n"
+    }
+  ]
+}

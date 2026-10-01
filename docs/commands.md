@@ -27,6 +27,12 @@ far from the current Home Assistant setup:
 - The user's confirmation on 2026-10-01 that lowercase `k1p0` can obtain
   current entity state after loading, configuring, and initializing the
   integration
+- A captured sequence of lowercase USB hub and video routing commands on
+  2026-10-01, including a rejected `h1p0`, a two-hub Sync reset, and both
+  global and individual video Sync replies; the user observed Hub 1 being
+  assigned to machine 2 on both linked KVMs independently of the channel,
+  followed by physical confirmation of Video 1's fixed routing across both
+  units and its independent return to Sync
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -40,10 +46,10 @@ yet established.
 
 The tables below preserve the original YAML setup as protocol evidence.
 The integration now implements channel and hotkey selection, buzzer and
-mouse channel-switching controls, and the `W0` display action. It receives
-the listed state feedback into native entities and offers a
-generic command action. See the [README](../README.md) for installation,
-migration, and logging instructions. The old helpers and shell actions are
+mouse channel-switching controls, the `W0` display action, and USB/video
+Sync actions. It receives the listed state feedback into native entities
+and offers a generic command action. See the [README](../README.md) for
+installation, migration, and logging instructions. The old helpers and shell actions are
 not required by the integration.
 
 ## Serial settings
@@ -216,8 +222,10 @@ capture confirms `bzon` and `BZON` receiving `BZON`, and `BZOFF`
 receiving `BZOFF`. The lowercase `bzoff` sender remains untested in these
 captures. The hotkey and mouse capture below establishes command-associated
 feedback for `ctrl`, `shift`, `scroll`, `caps`, and both cases of `M0` /
-`M1`. Other command meanings remain unconfirmed on this hardware; names
-alone do not prove a mapping to audio, hub, or other features.
+`M1`. The routing capture below establishes replies for lowercase `h1p2`,
+`h0p0`, `v1p2`, `v0p0`, and `v1p0`, and rejection of `h1p0`. Other command
+meanings remain unconfirmed on this hardware; names alone do not prove a
+mapping to audio or other features.
 
 ### Report observed after `K1P0`
 
@@ -591,6 +599,75 @@ two mouse changes. The repeated off/on mouse replies are parsed without
 duplicate notifications. The connection remains open and no extra commands
 are sent. Timestamps describe the host log, not response deadlines.
 
+### Debug capture after USB hub and video routing commands
+
+On 2026-10-01 the user sent six lowercase commands through the integration.
+The [capture fixture](../tests/fixtures/routing_debug_capture.json)
+preserves all 20 ordered events: six writes and 14 raw reads, with their
+original case, read boundaries, and host timestamps.
+
+| Command | TX timestamp | Complete reply | RX read count |
+| --- | --- | --- | --- |
+| `h1p2` | `12:14:27.260` | `HUB1 : Async-> Channel 2\r\n` | 3 |
+| `h1p0` | `12:15:37.241` | `ERROR\r\n` | 1 |
+| `h0p0` | `12:15:43.736` | `HUB1 : Sync\r\nHUB2 : Sync\r\n` | 1 |
+| `v1p2` | `12:18:14.604` | `Video1 : ASYNC-mode-Port2\r\n` | 3 |
+| `v0p0` | `12:19:00.481` | `Video-ALL : SYNC-mode\r\n` | 3 |
+| `v1p0` | `12:20:12.449` | `Video1 : SYNC-mode\r\n` | 3 |
+
+The user observed `h1p2` assigning USB Hub 1 on both linked KVMs to
+machine 2 even when the current channel was different. Its reply updates
+Hub 1 routing to `Channel 2`. In this context, Async describes a fixed
+assignment independent of the selected KVM channel. The user described
+`h0p0` as restoring both hubs to Sync, and its two replies report that
+state individually. Sync denotes routing that follows the selected
+channel, according to the user's description of the mapping behavior.
+
+`h1p0` returned `ERROR`. It must not be used as an individual Hub 1 Sync
+command. The user has not found a way to restore one hub without also
+restoring the other; this establishes the tested command's limitation,
+not that every firmware necessarily lacks such a command. The capture
+does not establish asynchronous routing commands for Hub 2 or other
+destination channels.
+
+The user described video routing as appearing to work similarly. `v1p2`
+reports Video 1 assigned to port 2, `v0p0` reports all video in Sync, and
+`v1p0` reports Video 1 in Sync. Unlike `h1p0`, `v1p0` produced recognized
+Sync feedback. Video commands therefore have a confirmed individual
+Sync form for Video 1 as well as a global Sync form. In a subsequent
+confirmation, the user verified `v1p2` physically pinning Video 1 to
+machine 2 on both linked KVMs, and `v1p0` restoring only Video 1 while
+leaving another pinned video output unchanged. This confirms the
+individual output's physical effect and scope in this installation.
+Other output/port combinations and uppercase equivalents remain untested
+in these captures, even where the earlier shell command inventory lists
+similar spellings.
+
+The native parser recognizes the four new exact reply forms. The global
+video Sync reply updates the confirmed Video 1 state; it does not create
+additional video entities. The bare `V1P0` and `V1P1` tokens in the earlier
+`K1P0` reports remain unrecognized: they are different from these routing
+replies, and their meaning in those reports is still unknown. Those
+reports therefore do not currently initialize video routing state.
+
+The device page provides **Sync both USB hubs** (`h0p0`), **Sync video
+output 1** (`v1p0`), and **Sync all video outputs** (`v0p0`) buttons.
+Their names make the global versus individual scope explicit. Routing
+sensors retain the observed hub settings and add Video 1 routing. They
+remain necessary because these buttons request actions rather than select
+and report a complete routing setting. Fixed assignments such as `h1p2`
+and `v1p2` are available through the manual command action. Full routing
+selectors are deferred until additional destination/output combinations
+are established; no temporary Channel 2-only selectors are created.
+
+The replay verifies all six writes, 14 reads, and seven complete reply
+lines. Hub 1 progresses from `Channel 2` to `Sync`, Hub 2 reports `Sync`,
+and Video 1 progresses from `Channel 2` to `Sync`. The final individual
+video Sync reply repeats the state already reported by the global reply.
+There are five state-change notifications; `ERROR` remains a debug
+diagnostic without changing state or closing the connection. No write
+alone establishes a state change, and no additional commands are sent.
+
 ### Automatic state initialization
 
 The user confirmed that lowercase `k1p0` can obtain current state for the
@@ -682,9 +759,9 @@ case. The stock serial sensor strips leading and trailing whitespace
 before publishing its state, as described above. The configured sensor
 has no additional value template. These are processed sensor state
 strings. The later debug captures establish CRLF response terminators for
-the supplied status, targeted-channel, display, buzzer, hotkey, and mouse
-exchanges; framing for other commands and hardware configurations remains
-unverified.
+the supplied status, targeted-channel, display, buzzer, hotkey, mouse, and
+routing exchanges; framing for other commands and hardware configurations
+remains unverified.
 
 For select helpers, the automation calls `input_select.select_option` with
 the exact option shown below. For boolean helpers, it calls
@@ -811,13 +888,23 @@ and change only from recognized feedback. They do not track separate
 state for linked KVMs. Converted settings have no compatibility sensors;
 the binary sensor platform and the earlier hotkey sensor are removed.
 
+Routing feedback now recognizes Hub 1 fixed to `Channel 2`, Video 1 fixed
+to `Channel 2`, and individual/global video Sync. Audio and hub routing
+sensors remain, and a Video 1 routing sensor is added. The three routing
+buttons send exact tested lowercase commands: `h0p0` restores both USB
+hubs to Sync, `v1p0` restores Video 1, and `v0p0` restores all video
+outputs. Only recognized replies update routing state. No button sends
+the rejected `h1p0`, and the global video Sync reply updates only the
+confirmed Video 1 state rather than creating untested video entities.
+
 Every valid channel selection sends a command, including a selection
 that matches the last observed channel. Unlike the old script's guard,
 this allows a quick change and change back before the first response
-arrives. Other command meanings remain unconfirmed, so those features are
-observed through sensors rather than exposed as controls. The
-`connectpro.send_command` action accepts a ConnectPro `device_id` and a
-single printable ASCII command line under `data`, and appends CRLF. This
+arrives. Audio routing and additional hub/video combinations remain
+unconfirmed. Their payloads stay in the command catalog for further
+verification. The `connectpro.send_command` action accepts a ConnectPro
+`device_id` and a single printable ASCII command line under `data`, and
+appends CRLF. This
 provides a way to use known commands while collecting evidence for
 additional features.
 
@@ -876,6 +963,12 @@ To complete the reference, collect:
   capture already preserves bytes, timing, and read boundaries for one
   exchange. The targeted channel capture adds physical observations for
   two commands; it does not establish the effects of every listed sender.
-- Startup/status behavior and any audio/hub modes beyond `Sync`, plus the
+- Additional hub/video destination channels and Hub 2/Video 2 fixed
+  routing, including their exact replies. Hub 1 and Video 1 routing to
+  machine 2, both-hub Sync, and individual/global video Sync are recorded
+  above. Whether an independent hub Sync command exists remains open;
+  `h1p0` is rejected in this installation.
+- Audio routing beyond `Sync`, video routing in status reports, and the
   retail KVM models and firmware versions to identify the scope of the
-  observed behavior.
+  observed behavior. Bare `V1P0` / `V1P1` report tokens do not yet provide
+  video state.

@@ -13,7 +13,11 @@ _RESPONSES: dict[str, tuple[str, str | bool]] = {
     "Mouse change channel : OFF": ("mouse_change_channel", False),
     "AUDIO : Sync": ("audio", "Sync"),
     "HUB1 : Sync": ("hub1", "Sync"),
+    "HUB1 : Async-> Channel 2": ("hub1", "Channel 2"),
     "HUB2 : Sync": ("hub2", "Sync"),
+    "Video1 : ASYNC-mode-Port2": ("video1", "Channel 2"),
+    "Video1 : SYNC-mode": ("video1", "Sync"),
+    "Video-ALL : SYNC-mode": ("video1", "Sync"),
 }
 for _channel in range(1, 5):
     for _message in (f"CH{_channel}", f"CH-{_channel}"):

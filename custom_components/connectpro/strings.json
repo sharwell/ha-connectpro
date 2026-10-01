@@ -40,6 +40,15 @@
     "button": {
       "reset": {
         "name": "Reset displays"
+      },
+      "sync_usb_hubs": {
+        "name": "Sync both USB hubs"
+      },
+      "sync_video1": {
+        "name": "Sync video output 1"
+      },
+      "sync_video_outputs": {
+        "name": "Sync all video outputs"
       }
     },
     "switch": {
@@ -59,6 +68,9 @@
       },
       "hub2": {
         "name": "Hub 2 routing"
+      },
+      "video1": {
+        "name": "Video 1 routing"
       }
     }
   },

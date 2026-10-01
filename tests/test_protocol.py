@@ -16,7 +16,7 @@ _SPEC.loader.exec_module(protocol)
 
 
 class ProtocolTests(unittest.TestCase):
-    """Exercise the existing automation's supported responses."""
+    """Exercise confirmed responses from the automation and device captures."""
 
     def test_known_response_mappings(self) -> None:
         responses = {
@@ -44,6 +44,42 @@ class ProtocolTests(unittest.TestCase):
         for response, expected in responses.items():
             with self.subTest(response=response):
                 self.assertEqual(protocol.parse_response(response), expected)
+
+    def test_observed_routing_replies_update_only_confirmed_endpoint(self) -> None:
+        """Global video sync reports only the one confirmed video endpoint."""
+        responses = {
+            "HUB1 : Async-> Channel 2": {"hub1": "Channel 2"},
+            "Video1 : ASYNC-mode-Port2": {"video1": "Channel 2"},
+            "Video1 : SYNC-mode": {"video1": "Sync"},
+            "Video-ALL : SYNC-mode": {"video1": "Sync"},
+        }
+        for response, expected in responses.items():
+            with self.subTest(response=response):
+                self.assertEqual(protocol.parse_response(response), expected)
+
+    def test_unobserved_routing_variants_do_not_set_state(self) -> None:
+        """Do not generalize tested replies to other ports, outputs, or casing."""
+        responses = [
+            "HUB2 : Async-> Channel 2",
+            "HUB1 : ASYNC-> Channel 2",
+            "Video2 : ASYNC-mode-Port2",
+            "Video2 : SYNC-mode",
+            "VIDEO1 : SYNC-mode",
+            "Video-ALL : ASYNC-mode-Port2",
+            "ERROR",
+            "V1P0",
+            "V1P1",
+        ]
+        for channel in (1, 3, 4):
+            responses.extend(
+                (
+                    f"HUB1 : Async-> Channel {channel}",
+                    f"Video1 : ASYNC-mode-Port{channel}",
+                )
+            )
+        for response in responses:
+            with self.subTest(response=response):
+                self.assertEqual(protocol.parse_response(response), {})
 
     def test_unknown_and_firmware_do_not_set_state(self) -> None:
         for line in ("ch1", " CH1", "CH1 ", "CH5", "AUDIO : 2", "\ufffd", ""):

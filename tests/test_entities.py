@@ -18,8 +18,12 @@ from custom_components.connectpro import (
     sensor,
     switch,
 )
-from custom_components.connectpro.button import ConnectProResetButton
+from custom_components.connectpro.button import (
+    ConnectProResetButton,
+    ConnectProRoutingSyncButton,
+)
 from custom_components.connectpro.const import DOMAIN
+from custom_components.connectpro.entity import ConnectProEntity
 from custom_components.connectpro.select import (
     ConnectProChannelSelect,
     ConnectProHotkeySelect,
@@ -246,6 +250,73 @@ async def test_reset_button_sends_exact_command(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("has_observed_state", [False, True])
+@pytest.mark.parametrize(
+    ("key", "command"),
+    [
+        ("sync_usb_hubs", "h0p0"),
+        ("sync_video1", "v1p0"),
+        ("sync_video_outputs", "v0p0"),
+    ],
+)
+async def test_routing_sync_buttons_send_exact_scoped_command_without_state_changes(
+    entry: SimpleNamespace,
+    client: FakeClient,
+    has_observed_state: bool,
+    key: str,
+    command: str,
+) -> None:
+    """Each button sends only its tested command, preserving unknown/observed state."""
+    if has_observed_state:
+        client.state.update(
+            {"hub1": "Channel 2", "hub2": "Sync", "video1": "Channel 2"}
+        )
+    before = client.state.copy()
+    entity = ConnectProRoutingSyncButton(entry, key)
+
+    await entity.async_press()
+
+    assert client.commands == [command]
+    assert client.state == before
+    assert entity.unique_id == f"entry-1_{key}"
+    assert entity.translation_key == key
+    assert entity.entity_category is EntityCategory.CONFIG
+    assert entity.entity_registry_enabled_default is True
+    assert entity.device_class is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["sync_usb_hubs", "sync_video1", "sync_video_outputs"])
+@pytest.mark.parametrize(
+    ("error", "expected_type"),
+    [
+        (ConnectionError("disconnected"), HomeAssistantError),
+        (OSError("write failed"), HomeAssistantError),
+        (TimeoutError("write timed out"), HomeAssistantError),
+        (ValueError("invalid command"), ServiceValidationError),
+    ],
+)
+async def test_routing_sync_failure_surfaces_without_changing_state(
+    entry: SimpleNamespace,
+    client: FakeClient,
+    key: str,
+    error: Exception,
+    expected_type: type[HomeAssistantError],
+) -> None:
+    """A failed sync action preserves every routing observation."""
+    client.state.update({"hub1": "Channel 2", "hub2": "Sync", "video1": "Channel 2"})
+    before = client.state.copy()
+    client.send_error = error
+
+    with pytest.raises(expected_type, match=str(error)) as raised:
+        await ConnectProRoutingSyncButton(entry, key).async_press()
+
+    assert raised.value.__cause__ is error
+    assert client.state == before
+    assert client.commands == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("initial_state", [None, False, True])
 @pytest.mark.parametrize(
     ("entity_type", "state_key", "action", "command", "reported_state"),
@@ -372,13 +443,16 @@ async def test_mouse_switch_change_back_before_feedback_is_not_dropped(
     [
         ("audio", "Sync"),
         ("hub1", "Sync"),
+        ("hub1", "Channel 2"),
         ("hub2", "Sync"),
+        ("video1", "Sync"),
+        ("video1", "Channel 2"),
     ],
 )
 def test_text_sensors_expose_only_observed_values(
     entry: SimpleNamespace, client: FakeClient, key: str, value: str
 ) -> None:
-    """Routing observations remain available without unconfirmed write controls."""
+    """Routing sensors show received values without sending commands."""
     entity = ConnectProSensor(entry, key)
     assert entity.native_value is None
     client.state[key] = value
@@ -407,8 +481,13 @@ async def test_platforms_share_device_identity_and_connection_availability(
 
     expected_keys = {
         Platform.SELECT: {"channel", "hotkey"},
-        Platform.BUTTON: {"reset"},
-        Platform.SENSOR: {"audio", "hub1", "hub2"},
+        Platform.BUTTON: {
+            "reset",
+            "sync_usb_hubs",
+            "sync_video1",
+            "sync_video_outputs",
+        },
+        Platform.SENSOR: {"audio", "hub1", "hub2", "video1"},
         Platform.SWITCH: {"buzzer", "mouse_change_channel"},
     }
     identities = []
@@ -427,7 +506,7 @@ async def test_platforms_share_device_identity_and_connection_availability(
         for platform_entities in entities_by_platform.values()
         for entity in platform_entities
     ]
-    assert len(entities) == 8
+    assert len(entities) == 12
     for entity in entities:
         assert entity.has_entity_name is True
         assert entity.should_poll is False
@@ -454,23 +533,27 @@ def test_device_name_falls_back_when_entry_title_is_empty(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("entity_type", "entity_id"),
+    ("entity_factory", "entity_id"),
     [
         (ConnectProChannelSelect, "select.connectpro_channel"),
         (ConnectProHotkeySelect, "select.connectpro_hotkey"),
         (ConnectProBuzzerSwitch, "switch.connectpro_buzzer"),
         (ConnectProMouseChannelSwitch, "switch.connectpro_mouse_channel_switching"),
+        (
+            lambda entry: ConnectProSensor(entry, "video1"),
+            "sensor.connectpro_video1_routing",
+        ),
     ],
 )
 async def test_entity_listener_updates_state_and_unsubscribes_on_removal(
     hass: HomeAssistant,
     entry: SimpleNamespace,
     client: FakeClient,
-    entity_type: type,
+    entity_factory: Callable[[SimpleNamespace], ConnectProEntity],
     entity_id: str,
 ) -> None:
     """Serial updates publish state only while the entity is registered."""
-    entity = entity_type(entry)
+    entity = entity_factory(entry)
     entity.hass = hass
     entity.entity_id = entity_id
     assert client.listeners == []
@@ -485,6 +568,7 @@ async def test_entity_listener_updates_state_and_unsubscribes_on_removal(
                 "hotkey": "Shift",
                 "buzzer": True,
                 "mouse_change_channel": True,
+                "video1": "Channel 2",
             }
         )
         client.notify()

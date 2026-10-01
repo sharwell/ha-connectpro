@@ -8,9 +8,9 @@ longer needed.
 This is an initial implementation based on the existing installation's
 commands and response mappings. User-provided captures from physical
 hardware confirm manual status, targeted channel, hotkey, buzzer, mouse
-channel-switching, and `W0` exchanges through the integration. The user
-observed `W0` cycling all displays off
-and on. The native `Ch1` through `Ch4` controls, recovery, and other
+channel-switching, USB/video routing, and `W0` exchanges through the
+integration. The user observed `W0` cycling all displays off and on.
+The native `Ch1` through `Ch4` controls, recovery, and other
 hardware configurations still need hardware verification. The
 [protocol reference](docs/commands.md) records the evidence and the
 features that still need confirmation.
@@ -79,19 +79,25 @@ integration entry; its existing entities are preserved.
 | Channel select | Sends `Ch1` through `Ch4`; reports `Channel 1` through `Channel 4` from received feedback. |
 | Reset displays button | Sends `W0`, matching the previous dashboard's Reset action. The user observed all displays cycling off and on; the captured reply is `Wake-Up : DP-ALL`. |
 | Hotkey select | Selects `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock` using `ctrl`, `shift`, `scroll`, or `caps`; reports recognized feedback. |
-| Audio, Hub 1, and Hub 2 sensors | Report the confirmed `Sync` feedback. Other modes need protocol evidence. |
+| Audio, Hub 1, and Hub 2 sensors | Report `Sync`; Hub 1 also reports the tested fixed assignment to `Channel 2`. |
+| Video 1 routing sensor | Reports the tested `Channel 2` assignment or `Sync` from routing replies. |
+| Sync both USB hubs button | Sends `h0p0`, restoring both hubs to Sync together. |
+| Sync video output 1 button | Sends `v1p0`, restoring Video 1 to Sync independently. |
+| Sync all video outputs button | Sends `v0p0`, restoring all video outputs to Sync. |
 | Buzzer switch | Sends `BZON` or `BZOFF`; reports the received on/off state. |
 | Mouse channel switching switch | Sends `M1` to enable or `M0` to disable mouse channel switching; reports the received on/off state. |
 
-The controls and routing sensors describe observed state. Audio and hub
-routing remain read-only until their commands are confirmed. State remains
-unknown until relevant feedback arrives; sending a command does not
+The controls and routing sensors describe observed state. Routing buttons
+request the tested Sync actions; fixed assignments remain available through
+the manual command action while full routing selectors await more evidence.
+Audio routing remains read-only. State remains unknown until relevant
+feedback arrives; sending a command does not
 establish that it succeeded. Hotkey, buzzer, and mouse channel switching
 each have one control that also reports state. Their earlier read-only
 sensors are removed during this prerelease development.
 
 Repeated captures show `K1P0` producing a report
-containing all seven known state categories. After `K1P1`, this report
+containing the seven original state categories. After `K1P1`, this report
 contains `CH-1`, consistent with the first/local KVM's channel. Possible
 effects on other settings remain unconfirmed. Observations also confirm
 that `K1P1` switches only the first KVM to channel 1 and `K2P1`
@@ -100,7 +106,7 @@ are available through the manual command action; the integration creates
 one device per serial connection, without separate channel entities for
 linked units. The integration sends lowercase `k1p0` once when its reader
 starts on a connection, and once after each successful reconnect. Received
-status lines populate the seven state categories as they arrive; there is
+status lines populate those seven state categories as they arrive; there is
 no periodic polling or optimistic state update. Entities become unavailable
 on a connection failure, and the integration retries automatically before
 requesting fresh state. The user has confirmed `k1p0` can obtain current
@@ -116,9 +122,9 @@ requests matching the last reported state, and wait for feedback before
 changing state.
 
 Use the entities on the integration's device page to select a channel or
-hotkey, control the buzzer or mouse channel switching, or press Reset
-displays. In an automation, replace the example entity IDs below with the
-ones created in your installation:
+hotkey, control the buzzer or mouse channel switching, reset displays, or
+restore USB/video routing to Sync. In an automation, replace the example
+entity IDs below with the ones created in your installation:
 
 ```yaml
 action: select.select_option
@@ -152,6 +158,12 @@ data:
 action: switch.turn_on
 target:
   entity_id: switch.your_kvm_mouse_channel_switching
+```
+
+```yaml
+action: button.press
+target:
+  entity_id: button.your_kvm_sync_usb_hubs
 ```
 
 For a command already known to work with your device, use the
@@ -209,6 +221,28 @@ hotkey commands and uppercase mouse commands. These settings are reported
 for one serial connection. The user verified the selected hotkeys and
 mouse channel switching in use and confirmed that the changes affect
 both linked KVMs in this installation.
+
+The [USB/video routing capture](docs/commands.md#debug-capture-after-usb-hub-and-video-routing-commands)
+shows `h1p2` assigning Hub 1 to machine 2 independently of the selected
+channel, and `h0p0` reporting both hubs in Sync. The user verified the fixed
+Hub 1 assignment on both linked KVMs. `h1p0` returned `ERROR`; the **Sync
+both USB hubs** button therefore sends `h0p0` and explicitly affects both
+hubs. An independent hub Sync command remains unknown.
+
+For video, `v1p2` reports Video 1 fixed to port 2, `v1p0` reports Video 1
+in Sync, and `v0p0` reports all video in Sync. The user verified that
+`v1p2` pins Video 1 to machine 2 on both KVMs and `v1p0` restores only
+Video 1 while leaving another pinned output unchanged. The two video
+Sync buttons expose their individual versus global scope. The existing
+manual command action can send `h1p2` or `v1p2` for those tested fixed
+assignments. Other destination/output combinations remain unconfirmed.
+
+Video 1 state remains unknown until a recognized routing reply arrives.
+The bare `V1P0` / `V1P1` tokens in the captured startup/status reports do
+not establish video routing state. Sync buttons also wait for received
+feedback before changing any sensor state. Routing sensors provide
+observed state alongside these action buttons; no stateful routing
+selector has been introduced yet.
 
 ## Debugging serial communication
 
