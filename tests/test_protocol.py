@@ -96,12 +96,9 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(response=response):
                 self.assertEqual(protocol.parse_response(response), expected)
 
-    def test_unverified_audio_scan_and_uart_messages_do_not_set_state(self) -> None:
-        """Unobserved routing/timing and UART diagnostics remain unrecognized."""
+    def test_unknown_scan_variants_and_uart_messages_do_not_set_state(self) -> None:
+        """Unobserved timing forms and UART diagnostics remain unrecognized."""
         responses = (
-            "AUDIO : CHANNEL2",
-            "AUDIO : CHANNEL3",
-            "AUDIO : CHANNEL4",
             "AUDIO : Channel1",
             "Auto Scan : On",
             "Auto Scan : Off",
@@ -120,36 +117,69 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(protocol.parse_response(response), {})
                 self.assertNotIn(response, protocol.IGNORED_RESPONSES)
 
-    def test_observed_routing_replies_update_only_confirmed_endpoint(self) -> None:
-        """Global video sync reports only the one confirmed video endpoint."""
-        responses = {
-            "HUB1 : Async-> Channel 2": {"hub1": "Channel 2"},
-            "Video1 : ASYNC-mode-Port2": {"video1": "Channel 2"},
-            "Video1 : SYNC-mode": {"video1": "Sync"},
-            "Video-ALL : SYNC-mode": {"video1": "Sync"},
-        }
+    def test_routing_patterns_cover_each_requested_endpoint_and_channel(self) -> None:
+        """Expand confirmed forms to the user-requested sibling ports and channels."""
+        responses = {"AUDIO : Sync": {"audio": "Sync"}}
+        for channel in range(1, 5):
+            responses[f"AUDIO : CHANNEL{channel}"] = {"audio": f"Channel {channel}"}
+            for endpoint in (1, 2):
+                responses[f"HUB{endpoint} : Async-> Channel {channel}"] = {
+                    f"hub{endpoint}": f"Channel {channel}"
+                }
+                responses[f"Video{endpoint} : ASYNC-mode-Port{channel}"] = {
+                    f"video{endpoint}": f"Channel {channel}"
+                }
+        for endpoint in (1, 2):
+            responses[f"HUB{endpoint} : Sync"] = {f"hub{endpoint}": "Sync"}
+            responses[f"Video{endpoint} : SYNC-mode"] = {f"video{endpoint}": "Sync"}
         for response, expected in responses.items():
             with self.subTest(response=response):
                 self.assertEqual(protocol.parse_response(response), expected)
 
-    def test_unobserved_routing_variants_do_not_set_state(self) -> None:
-        """Do not generalize tested replies to other ports, outputs, or casing."""
+    def test_video_all_sync_returns_both_outputs_in_one_update(self) -> None:
+        self.assertEqual(
+            protocol.parse_response("Video-ALL : SYNC-mode"),
+            {"video1": "Sync", "video2": "Sync"},
+        )
+
+    def test_invalid_routing_variants_do_not_set_state(self) -> None:
+        """Keep the sanctioned forms bounded and case/spacing sensitive."""
         responses = [
-            "HUB2 : Async-> Channel 2",
             "HUB1 : ASYNC-> Channel 2",
-            "Video2 : ASYNC-mode-Port2",
-            "Video2 : SYNC-mode",
+            "HUB1 : Async-> Channel2",
+            "HUB1 : Async -> Channel 2",
+            "HUB1 : Async->  Channel 2",
+            "HUB2 : SYNC",
+            "AUDIO : CHANNEL 2",
+            "AUDIO : Channel2",
+            "AUDIO : SYNC",
             "VIDEO1 : SYNC-mode",
+            "Video1 : ASYNC-mode-Port 2",
+            "Video2 : Async-mode-Port2",
             "Video-ALL : ASYNC-mode-Port2",
+            "Video-ALL : Sync-mode",
+            "Video-ALL : SYNC-mode ",
+            " Video-ALL : SYNC-mode",
             "ERROR",
             "V1P0",
             "V1P1",
         ]
-        for channel in (1, 3, 4):
+        for channel in ("0", "5", "-1", "01", "1.0"):
+            responses.append(f"AUDIO : CHANNEL{channel}")
+            for endpoint in (1, 2):
+                responses.extend(
+                    (
+                        f"HUB{endpoint} : Async-> Channel {channel}",
+                        f"Video{endpoint} : ASYNC-mode-Port{channel}",
+                    )
+                )
+        for endpoint in ("0", "3", "-1", "01"):
             responses.extend(
                 (
-                    f"HUB1 : Async-> Channel {channel}",
-                    f"Video1 : ASYNC-mode-Port{channel}",
+                    f"HUB{endpoint} : Sync",
+                    f"HUB{endpoint} : Async-> Channel 2",
+                    f"Video{endpoint} : SYNC-mode",
+                    f"Video{endpoint} : ASYNC-mode-Port2",
                 )
             )
         for response in responses:

@@ -12,7 +12,6 @@ _RESPONSES: dict[str, tuple[str, str | bool]] = {
     "Mouse change channel : ON": ("mouse_change_channel", True),
     "Mouse change channel : OFF": ("mouse_change_channel", False),
     "AUDIO : Sync": ("audio", "Sync"),
-    "AUDIO : CHANNEL1": ("audio", "Channel 1"),
     "Auto Scan : ON": ("auto_scan", True),
     "Auto Scan : OFF": ("auto_scan", False),
     "Auto Scan : 1(5sec)": ("auto_scan_interval", "5 seconds"),
@@ -20,16 +19,23 @@ _RESPONSES: dict[str, tuple[str, str | bool]] = {
     "Auto Scan : 3(15Sec)": ("auto_scan_interval", "15 seconds"),
     "Auto Scan : 4(20Sec)": ("auto_scan_interval", "20 seconds"),
     "Auto Scan : 5(30Sec)": ("auto_scan_interval", "30 seconds"),
-    "HUB1 : Sync": ("hub1", "Sync"),
-    "HUB1 : Async-> Channel 2": ("hub1", "Channel 2"),
-    "HUB2 : Sync": ("hub2", "Sync"),
-    "Video1 : ASYNC-mode-Port2": ("video1", "Channel 2"),
-    "Video1 : SYNC-mode": ("video1", "Sync"),
-    "Video-ALL : SYNC-mode": ("video1", "Sync"),
 }
 for _channel in range(1, 5):
     for _message in (f"CH{_channel}", f"CH-{_channel}"):
         _RESPONSES[_message] = ("channel", f"Channel {_channel}")
+    _RESPONSES[f"AUDIO : CHANNEL{_channel}"] = ("audio", f"Channel {_channel}")
+    for _endpoint in (1, 2):
+        _RESPONSES[f"HUB{_endpoint} : Async-> Channel {_channel}"] = (
+            f"hub{_endpoint}",
+            f"Channel {_channel}",
+        )
+        _RESPONSES[f"Video{_endpoint} : ASYNC-mode-Port{_channel}"] = (
+            f"video{_endpoint}",
+            f"Channel {_channel}",
+        )
+for _endpoint in (1, 2):
+    _RESPONSES[f"HUB{_endpoint} : Sync"] = (f"hub{_endpoint}", "Sync")
+    _RESPONSES[f"Video{_endpoint} : SYNC-mode"] = (f"video{_endpoint}", "Sync")
 for _key, _option in (
     ("CTRL", "Ctrl"),
     ("SHIFT", "Shift"),
@@ -45,6 +51,8 @@ _MODEL_REPORT_PREFIX = "UDP2_14AP_U3 : Version_Number - "
 
 def parse_response(line: str) -> dict[str, str | bool]:
     """Return observed state or a model confirmed by its exact board identifier."""
+    if line == "Video-ALL : SYNC-mode":
+        return {"video1": "Sync", "video2": "Sync"}
     if (
         line.startswith(_MODEL_REPORT_PREFIX)
         and line[len(_MODEL_REPORT_PREFIX) :].strip()

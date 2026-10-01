@@ -38,34 +38,7 @@
       },
       "auto_scan": {
         "name": "Auto Scan"
-      }
-    },
-    "button": {
-      "reset": {
-        "name": "Reset displays"
       },
-      "sync_audio": {
-        "name": "Sync audio"
-      },
-      "sync_usb_hubs": {
-        "name": "Sync both USB hubs"
-      },
-      "sync_video1": {
-        "name": "Sync video output 1"
-      },
-      "sync_video_outputs": {
-        "name": "Sync all video outputs"
-      }
-    },
-    "switch": {
-      "buzzer": {
-        "name": "Buzzer"
-      },
-      "mouse_change_channel": {
-        "name": "Mouse channel switching"
-      }
-    },
-    "sensor": {
       "audio": {
         "name": "Audio routing"
       },
@@ -77,6 +50,25 @@
       },
       "video1": {
         "name": "Video 1 routing"
+      },
+      "video2": {
+        "name": "Video 2 routing"
+      }
+    },
+    "button": {
+      "reset": {
+        "name": "Reset displays"
+      },
+      "sync_usb_hubs": {
+        "name": "Sync both USB hubs"
+      }
+    },
+    "switch": {
+      "buzzer": {
+        "name": "Buzzer"
+      },
+      "mouse_change_channel": {
+        "name": "Mouse channel switching"
       }
     }
   },

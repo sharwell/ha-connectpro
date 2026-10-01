@@ -1,4 +1,4 @@
-"""Channel, hotkey, and automatic scan selection for ConnectPro KVM devices."""
+"""Channel, routing, hotkey, and scan selection for ConnectPro KVM devices."""
 
 from __future__ import annotations
 
@@ -31,6 +31,14 @@ AUTO_SCAN_COMMANDS = {
     "20 seconds": "s4",
     "30 seconds": "s5",
 }
+ROUTING_OPTIONS = ("Sync", "Channel 1", "Channel 2", "Channel 3", "Channel 4")
+ROUTING_COMMAND_PREFIXES = {
+    "audio": "o",
+    "video1": "v1p",
+    "video2": "v2p",
+    "hub1": "h1p",
+    "hub2": "h2p",
+}
 
 
 async def async_setup_entry(
@@ -38,12 +46,13 @@ async def async_setup_entry(
     entry: ConnectProConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the KVM channel, hotkey, and automatic scan selectors."""
+    """Set up the KVM channel, routing, hotkey, and scan selectors."""
     async_add_entities(
         [
             ConnectProChannelSelect(entry),
             ConnectProHotkeySelect(entry),
             ConnectProAutoScanSelect(entry),
+            *(ConnectProRoutingSelect(entry, key) for key in ROUTING_COMMAND_PREFIXES),
         ]
     )
 
@@ -90,6 +99,37 @@ class ConnectProHotkeySelect(ConnectProEntity, SelectEntity):
         if option not in HOTKEY_COMMANDS:
             raise ServiceValidationError(f"Unsupported ConnectPro hotkey: {option}")
         await self._async_send_command(HOTKEY_COMMANDS[option])
+
+
+class ConnectProRoutingSelect(ConnectProEntity, SelectEntity):
+    """Select a routing destination while reporting only observed state."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(self, entry: ConnectProConfigEntry, key: str) -> None:
+        """Initialize an audio, video, or USB hub routing selector."""
+        super().__init__(entry, key)
+        self._attr_options = list(ROUTING_OPTIONS)
+        self._command_prefix = ROUTING_COMMAND_PREFIXES[key]
+
+    @property
+    def current_option(self) -> str | None:
+        """Return a recognized routing destination reported by the KVM."""
+        value = self._client.state.get(self._state_key)
+        return value if isinstance(value, str) and value in ROUTING_OPTIONS else None
+
+    async def async_select_option(self, option: str) -> None:
+        """Request routing, requiring the shared button to synchronize USB hubs."""
+        if option not in ROUTING_OPTIONS:
+            raise ServiceValidationError(f"Unsupported ConnectPro routing: {option}")
+        if option == "Sync" and self._state_key in ("hub1", "hub2"):
+            raise ServiceValidationError(
+                "Hub routing cannot be synchronized independently. "
+                "Use Sync both USB hubs to synchronize both hubs."
+            )
+        port = ROUTING_OPTIONS.index(option)
+        await self._async_send_command(f"{self._command_prefix}{port}")
 
 
 class ConnectProAutoScanSelect(ConnectProEntity, SelectEntity):

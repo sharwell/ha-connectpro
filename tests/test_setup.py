@@ -23,6 +23,7 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 
 @pytest.fixture
@@ -31,6 +32,7 @@ async def hass(tmp_path):
     instance = HomeAssistant(str(tmp_path))
     instance.config_entries = ConfigEntries(instance, {})
     await dr.async_load(instance)
+    await er.async_load(instance)
     yield instance
     await instance.async_stop(force=True)
 
@@ -133,17 +135,30 @@ async def test_setup_opens_one_shared_connection_and_closes_on_stop(hass):
 
 
 async def test_setup_failure_releases_connection_and_requests_ha_retry(hass):
+    entry = make_entry()
+    register_device(hass, entry)
+    registry = er.async_get(hass)
+    previous = registry.async_get_or_create(
+        "sensor", "connectpro", f"{entry.entry_id}_audio", config_entry=entry
+    )
     client = make_client()
     client.async_connect.side_effect = OSError("port unavailable")
     with patch("custom_components.connectpro.ConnectProClient", return_value=client):
         with pytest.raises(ConfigEntryNotReady, match="port unavailable"):
-            await async_setup_entry(hass, make_entry())
+            await async_setup_entry(hass, entry)
     client.async_close.assert_awaited_once()
     client.async_run.assert_not_called()
     client.add_listener.assert_not_called()
+    assert registry.async_get(previous.entity_id) is not None
 
 
 async def test_platform_setup_failure_closes_serial_port(hass):
+    entry = make_entry()
+    register_device(hass, entry)
+    registry = er.async_get(hass)
+    previous = registry.async_get_or_create(
+        "button", "connectpro", f"{entry.entry_id}_sync_video1", config_entry=entry
+    )
     client = make_client()
     with (
         patch("custom_components.connectpro.ConnectProClient", return_value=client),
@@ -154,10 +169,81 @@ async def test_platform_setup_failure_closes_serial_port(hass):
         ),
         pytest.raises(RuntimeError, match="platform failed"),
     ):
-        await async_setup_entry(hass, make_entry())
+        await async_setup_entry(hass, entry)
     client.async_close.assert_awaited_once()
     client.async_run.assert_not_called()
     client.add_listener.assert_not_called()
+    assert registry.async_get(previous.entity_id) is not None
+
+
+async def test_successful_setup_removes_only_replaced_routing_registry_entries(hass):
+    """Conversion removes exact old entries while preserving all unrelated entities."""
+    entry, other_entry, client = make_entry(), make_entry(), make_client()
+    register_device(hass, entry)
+    register_device(hass, other_entry)
+    registry = er.async_get(hass)
+    obsolete = []
+    for domain, keys in (
+        ("sensor", ("audio", "hub1", "hub2", "video1")),
+        ("button", ("sync_audio", "sync_video1", "sync_video_outputs")),
+    ):
+        for key in keys:
+            obsolete.append(
+                registry.async_get_or_create(
+                    domain,
+                    "connectpro",
+                    f"{entry.entry_id}_{key}",
+                    config_entry=entry,
+                    suggested_object_id=f"custom_name_{key}",
+                ).entity_id
+            )
+
+    preserved = []
+    for domain, platform, key, owner in (
+        ("button", "connectpro", "reset", entry),
+        ("button", "connectpro", "sync_usb_hubs", entry),
+        ("sensor", "connectpro", "unrelated", entry),
+        ("binary_sensor", "connectpro", "audio", entry),
+        ("sensor", "other", "audio", entry),
+        ("sensor", "connectpro", "audio", other_entry),
+    ):
+        preserved.append(
+            registry.async_get_or_create(
+                domain, platform, f"{owner.entry_id}_{key}", config_entry=owner
+            ).entity_id
+        )
+
+    async def forward_platforms(loaded_entry, platforms):
+        assert loaded_entry is entry
+        assert all(registry.async_get(entity_id) is not None for entity_id in obsolete)
+        for key in ("audio", "hub1", "hub2", "video1", "video2"):
+            preserved.append(
+                registry.async_get_or_create(
+                    "select",
+                    "connectpro",
+                    f"{entry.entry_id}_{key}",
+                    config_entry=entry,
+                ).entity_id
+            )
+
+    async def run_reader(*, initialize_state):
+        assert initialize_state
+        assert all(registry.async_get(entity_id) is None for entity_id in obsolete)
+
+    client.async_run.side_effect = run_reader
+    with (
+        patch("custom_components.connectpro.ConnectProClient", return_value=client),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new=AsyncMock(side_effect=forward_platforms),
+        ),
+    ):
+        assert await async_setup_entry(hass, entry)
+    await hass.async_block_till_done()
+    assert all(registry.async_get(entity_id) is None for entity_id in obsolete)
+    assert set(registry.entities) == set(preserved)
+    await entry._async_process_on_unload(hass)
 
 
 async def test_device_model_updates_without_enabled_entities_and_survives_disconnect(

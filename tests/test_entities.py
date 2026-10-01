@@ -15,7 +15,6 @@ from custom_components.connectpro import (
     PLATFORMS,
     button,
     select,
-    sensor,
     switch,
 )
 from custom_components.connectpro.button import (
@@ -28,8 +27,8 @@ from custom_components.connectpro.select import (
     ConnectProAutoScanSelect,
     ConnectProChannelSelect,
     ConnectProHotkeySelect,
+    ConnectProRoutingSelect,
 )
-from custom_components.connectpro.sensor import ConnectProSensor
 from custom_components.connectpro.switch import (
     ConnectProBuzzerSwitch,
     ConnectProMouseChannelSwitch,
@@ -347,23 +346,12 @@ async def test_reset_button_sends_exact_command(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("has_observed_state", [False, True])
-@pytest.mark.parametrize(
-    ("key", "command"),
-    [
-        ("sync_audio", "o0"),
-        ("sync_usb_hubs", "h0p0"),
-        ("sync_video1", "v1p0"),
-        ("sync_video_outputs", "v0p0"),
-    ],
-)
-async def test_routing_sync_buttons_send_exact_scoped_command_without_state_changes(
+async def test_hub_sync_button_sends_shared_command_without_state_changes(
     entry: SimpleNamespace,
     client: FakeClient,
     has_observed_state: bool,
-    key: str,
-    command: str,
 ) -> None:
-    """Each button sends only its tested command, preserving unknown/observed state."""
+    """The shared hub action preserves unknown or observed state until feedback."""
     if has_observed_state:
         client.state.update(
             {
@@ -374,23 +362,20 @@ async def test_routing_sync_buttons_send_exact_scoped_command_without_state_chan
             }
         )
     before = client.state.copy()
-    entity = ConnectProRoutingSyncButton(entry, key)
+    entity = ConnectProRoutingSyncButton(entry, "sync_usb_hubs")
 
     await entity.async_press()
 
-    assert client.commands == [command]
+    assert client.commands == ["h0p0"]
     assert client.state == before
-    assert entity.unique_id == f"entry-1_{key}"
-    assert entity.translation_key == key
+    assert entity.unique_id == "entry-1_sync_usb_hubs"
+    assert entity.translation_key == "sync_usb_hubs"
     assert entity.entity_category is EntityCategory.CONFIG
     assert entity.entity_registry_enabled_default is True
     assert entity.device_class is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "key", ["sync_audio", "sync_usb_hubs", "sync_video1", "sync_video_outputs"]
-)
 @pytest.mark.parametrize(
     ("error", "expected_type"),
     [
@@ -400,10 +385,9 @@ async def test_routing_sync_buttons_send_exact_scoped_command_without_state_chan
         (ValueError("invalid command"), ServiceValidationError),
     ],
 )
-async def test_routing_sync_failure_surfaces_without_changing_state(
+async def test_hub_sync_failure_surfaces_without_changing_state(
     entry: SimpleNamespace,
     client: FakeClient,
-    key: str,
     error: Exception,
     expected_type: type[HomeAssistantError],
 ) -> None:
@@ -420,7 +404,7 @@ async def test_routing_sync_failure_surfaces_without_changing_state(
     client.send_error = error
 
     with pytest.raises(expected_type, match=str(error)) as raised:
-        await ConnectProRoutingSyncButton(entry, key).async_press()
+        await ConnectProRoutingSyncButton(entry, "sync_usb_hubs").async_press()
 
     assert raised.value.__cause__ is error
     assert client.state == before
@@ -550,26 +534,159 @@ async def test_mouse_switch_change_back_before_feedback_is_not_dropped(
     assert entity.is_on is False
 
 
+@pytest.mark.parametrize("key", ["audio", "video1", "video2", "hub1", "hub2"])
+def test_routing_selectors_report_only_known_destinations(
+    entry: SimpleNamespace, client: FakeClient, key: str
+) -> None:
+    """Each route exposes observed Sync/channel state with no default guess."""
+    entity = ConnectProRoutingSelect(entry, key)
+    options = ["Sync", "Channel 1", "Channel 2", "Channel 3", "Channel 4"]
+    assert entity.options == options
+    assert entity.current_option is None
+    assert entity.entity_category is EntityCategory.CONFIG
+    assert entity.entity_registry_enabled_default is True
+    for value in options:
+        client.state[key] = value
+        assert entity.current_option == value
+        assert entity.state == value
+    for value in (False, "Channel 5", "sync"):
+        client.state[key] = value
+        assert entity.current_option is None
+    assert client.commands == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", range(1, 5))
 @pytest.mark.parametrize(
-    ("key", "value"),
+    ("key", "prefix"),
     [
-        ("audio", "Sync"),
-        ("audio", "Channel 1"),
-        ("hub1", "Sync"),
-        ("hub1", "Channel 2"),
-        ("hub2", "Sync"),
-        ("video1", "Sync"),
-        ("video1", "Channel 2"),
+        ("audio", "o"),
+        ("video1", "v1p"),
+        ("video2", "v2p"),
+        ("hub1", "h1p"),
+        ("hub2", "h2p"),
     ],
 )
-def test_text_sensors_expose_only_observed_values(
-    entry: SimpleNamespace, client: FakeClient, key: str, value: str
+async def test_routing_channel_requests_use_exact_route_commands_and_wait_for_feedback(
+    entry: SimpleNamespace, client: FakeClient, key: str, prefix: str, channel: int
 ) -> None:
-    """Routing sensors show received values without sending commands."""
-    entity = ConnectProSensor(entry, key)
-    assert entity.native_value is None
-    client.state[key] = value
-    assert entity.native_value == value
+    """All five routes map channels 1-4 without optimistic updates or extra writes."""
+    client.state[key] = "Sync"
+    entity = ConnectProRoutingSelect(entry, key)
+
+    await entity.async_select_option(f"Channel {channel}")
+
+    assert client.commands == [f"{prefix}{channel}"]
+    assert entity.current_option == "Sync"
+    client.state[key] = f"Channel {channel}"
+    assert entity.current_option == f"Channel {channel}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "command"), [("audio", "o0"), ("video1", "v1p0"), ("video2", "v2p0")]
+)
+async def test_audio_and_video_sync_requests_wait_for_observed_state(
+    entry: SimpleNamespace, client: FakeClient, key: str, command: str
+) -> None:
+    """Only audio and video selectors can request independent Sync."""
+    client.state[key] = "Channel 2"
+    entity = ConnectProRoutingSelect(entry, key)
+
+    await entity.async_select_option("Sync")
+
+    assert client.commands == [command]
+    assert entity.current_option == "Channel 2"
+    client.state[key] = "Sync"
+    assert entity.current_option == "Sync"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["hub1", "hub2"])
+@pytest.mark.parametrize("observed", ["Sync", "Channel 2"])
+async def test_hub_sync_selection_is_rejected_before_any_command(
+    entry: SimpleNamespace, client: FakeClient, key: str, observed: str
+) -> None:
+    """HA can display Sync while the backend protects both independent hub routes."""
+    client.state[key] = observed
+    entity = ConnectProRoutingSelect(entry, key)
+    assert "Sync" in entity.options
+
+    with pytest.raises(ServiceValidationError) as raised:
+        await entity.async_handle_select_option("Sync")
+
+    assert str(raised.value) == (
+        "Hub routing cannot be synchronized independently. "
+        "Use Sync both USB hubs to synchronize both hubs."
+    )
+    assert client.commands == []
+    assert entity.current_option == observed
+    assert client.state == {key: observed}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "option"),
+    [
+        ("audio", "Channel 0"),
+        ("video1", "Channel 5"),
+        ("video2", "sync"),
+        ("hub1", "Ch2"),
+        ("hub2", ""),
+    ],
+)
+async def test_routing_rejects_invalid_options(
+    entry: SimpleNamespace, client: FakeClient, key: str, option: str
+) -> None:
+    """Invalid options never become arbitrary or guessed serial commands."""
+    with pytest.raises(ServiceValidationError, match="Unsupported ConnectPro routing"):
+        await ConnectProRoutingSelect(entry, key).async_select_option(option)
+    assert client.commands == []
+
+
+@pytest.mark.asyncio
+async def test_routing_change_back_before_feedback_is_not_dropped(
+    entry: SimpleNamespace, client: FakeClient
+) -> None:
+    """Matching stale routing feedback still sends the user's latest request."""
+    client.state["video2"] = "Channel 2"
+    entity = ConnectProRoutingSelect(entry, "video2")
+
+    await entity.async_select_option("Channel 3")
+    await entity.async_select_option("Channel 2")
+
+    assert client.commands == ["v2p3", "v2p2"]
+    assert entity.current_option == "Channel 2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "error", "expected_type"),
+    [
+        ("audio", ConnectionError("disconnected"), HomeAssistantError),
+        ("video1", OSError("write failed"), HomeAssistantError),
+        ("video2", TimeoutError("write timed out"), HomeAssistantError),
+        ("hub1", ValueError("invalid command"), ServiceValidationError),
+        ("hub2", OSError("write failed"), HomeAssistantError),
+    ],
+)
+async def test_routing_errors_preserve_observed_state(
+    entry: SimpleNamespace,
+    client: FakeClient,
+    key: str,
+    error: Exception,
+    expected_type: type[HomeAssistantError],
+) -> None:
+    """All routes surface transport errors without fabricating successful state."""
+    client.state[key] = "Sync"
+    client.send_error = error
+    entity = ConnectProRoutingSelect(entry, key)
+
+    with pytest.raises(expected_type, match=str(error)) as raised:
+        await entity.async_select_option("Channel 2")
+
+    assert raised.value.__cause__ is error
+    assert entity.current_option == "Sync"
     assert client.commands == []
 
 
@@ -581,7 +698,6 @@ async def test_platforms_share_device_identity_and_connection_availability(
     platforms = {
         Platform.SELECT: select,
         Platform.BUTTON: button,
-        Platform.SENSOR: sensor,
         Platform.SWITCH: switch,
     }
     assert set(PLATFORMS) == set(platforms)
@@ -593,15 +709,17 @@ async def test_platforms_share_device_identity_and_connection_availability(
         )
 
     expected_keys = {
-        Platform.SELECT: {"channel", "hotkey", "auto_scan"},
-        Platform.BUTTON: {
-            "reset",
-            "sync_audio",
-            "sync_usb_hubs",
-            "sync_video1",
-            "sync_video_outputs",
+        Platform.SELECT: {
+            "channel",
+            "hotkey",
+            "auto_scan",
+            "audio",
+            "video1",
+            "video2",
+            "hub1",
+            "hub2",
         },
-        Platform.SENSOR: {"audio", "hub1", "hub2", "video1"},
+        Platform.BUTTON: {"reset", "sync_usb_hubs"},
         Platform.SWITCH: {"buzzer", "mouse_change_channel"},
     }
     identities = []
@@ -620,7 +738,7 @@ async def test_platforms_share_device_identity_and_connection_availability(
         for platform_entities in entities_by_platform.values()
         for entity in platform_entities
     ]
-    assert len(entities) == 14
+    assert len(entities) == 12
     for entity in entities:
         assert entity.has_entity_name is True
         assert entity.should_poll is False
@@ -682,8 +800,8 @@ def test_delayed_model_is_included_without_entity_subscription(
         (ConnectProBuzzerSwitch, "switch.connectpro_buzzer"),
         (ConnectProMouseChannelSwitch, "switch.connectpro_mouse_channel_switching"),
         (
-            lambda entry: ConnectProSensor(entry, "video1"),
-            "sensor.connectpro_video1_routing",
+            lambda entry: ConnectProRoutingSelect(entry, "video1"),
+            "select.connectpro_video1_routing",
         ),
     ],
 )

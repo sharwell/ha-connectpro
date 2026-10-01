@@ -16,6 +16,7 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
 from .client import ConnectProClient, SerialSettings
@@ -38,7 +39,6 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [
     Platform.SELECT,
     Platform.BUTTON,
-    Platform.SENSOR,
     Platform.SWITCH,
 ]
 
@@ -111,6 +111,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConnectProConfigEntry) -
     unsubscribe_metadata = None
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        replaced_entities = {
+            (domain, f"{entry.entry_id}_{key}")
+            for domain, keys in (
+                ("sensor", ("audio", "hub1", "hub2", "video1")),
+                ("button", ("sync_audio", "sync_video1", "sync_video_outputs")),
+            )
+            for key in keys
+        }
+        entity_registry = er.async_get(hass)
+        for registered in er.async_entries_for_config_entry(
+            entity_registry, entry.entry_id
+        ):
+            if (
+                registered.platform == DOMAIN
+                and (registered.domain, registered.unique_id) in replaced_entities
+            ):
+                entity_registry.async_remove(registered.entity_id)
 
         @callback
         def async_update_device_metadata() -> None:

@@ -86,24 +86,28 @@ versions. See [model identification](docs/commands.md#model-identification).
 | Channel select | Sends `Ch1` through `Ch4`; reports `Channel 1` through `Channel 4` from received feedback. |
 | Reset displays button | Sends `W0`, matching the previous dashboard's Reset action. The user observed all displays cycling off and on; the captured reply is `Wake-Up : DP-ALL`. |
 | Hotkey select | Selects `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock` using `ctrl`, `shift`, `scroll`, or `caps`; reports recognized feedback. |
-| Audio routing sensor | Reports `Sync` or the tested fixed assignment to `Channel 1`. |
-| Hub 1 and Hub 2 sensors | Report `Sync`; Hub 1 also reports the tested fixed assignment to `Channel 2`. |
-| Video 1 routing sensor | Reports the tested `Channel 2` assignment or `Sync` from routing replies. |
+| Audio routing select | Selects `Sync` or `Channel 1` through `Channel 4` using `o0` through `o4`. |
+| Video 1 and Video 2 routing selects | Select `Sync` or `Channel 1` through `Channel 4` using `v1p0`–`v1p4` or `v2p0`–`v2p4`. |
+| Hub 1 and Hub 2 routing selects | Select `Channel 1` through `Channel 4` using `h1p1`–`h1p4` or `h2p1`–`h2p4`; display reported `Sync` but reject selecting it individually. |
 | Sync both USB hubs button | Sends `h0p0`, restoring both hubs to Sync together. |
-| Sync video output 1 button | Sends `v1p0`, restoring Video 1 to Sync independently. |
-| Sync all video outputs button | Sends `v0p0`, restoring all video outputs to Sync. |
-| Sync audio button | Sends `o0`, restoring audio routing to Sync. |
 | Auto scan select | Selects `Off`, `5 seconds`, `8 seconds`, `15 seconds`, `20 seconds`, or `30 seconds` using `s0` through `s5`. Choosing a duration starts scanning. |
 | Buzzer switch | Sends `BZON` or `BZOFF`; reports the received on/off state. |
 | Mouse channel switching switch | Sends `M1` to enable or `M0` to disable mouse channel switching; reports the received on/off state. |
 
-The controls and routing sensors describe observed state. Routing buttons
-request the tested Sync actions; fixed assignments remain available through
-the manual command action while full routing selectors await more evidence.
+Each routing dropdown is a configuration entity and reports its observed
+setting. Audio and video accept Sync directly. Hub Sync is a reported
+state, but choosing it raises an error directing you to **Sync both USB
+hubs**, because independent hub Sync is not established. Home Assistant
+does not support graying out one dropdown option, so Sync remains visible
+and is blocked when requested, including through automations.
+
 State remains unknown until relevant feedback arrives; sending a command
-does not establish that it succeeded. Hotkey, buzzer, and mouse channel
-switching each have one control that also reports state. Their earlier read-only
-sensors are removed during this prerelease development.
+does not establish that it succeeded. Routing controls replace the earlier
+routing sensors and audio/video Sync buttons. Those obsolete entity entries
+are removed on setup during this prerelease development; there are no
+compatibility copies. Existing dashboards and automations should use the
+new selects. Hotkey, buzzer, and mouse channel switching also each have
+one control that reports state.
 
 Repeated captures show `K1P0` producing a report
 containing the seven original state categories. After `K1P1`, this report
@@ -115,7 +119,8 @@ are available through the manual command action; the integration creates
 one device per serial connection, without separate channel entities for
 linked units. The integration sends lowercase `k1p0` once when its reader
 starts on a connection, and once after each successful reconnect. Received
-status lines populate those seven state categories as they arrive; there is
+status lines populate recognized settings and model metadata as they arrive;
+the latest report also supplies explicit Video 1 and Video 2 routing. There is
 no periodic polling or optimistic state update. Entities become unavailable
 on a connection failure, and the integration retries automatically before
 requesting fresh state. The user has confirmed `k1p0` can obtain current
@@ -126,7 +131,7 @@ records this separately from the earlier uppercase captures.
 Each channel selection sends the requested command, even when the last
 reported channel matches. This keeps rapid requests, such as switching to
 Channel 3 and back to Channel 2 before feedback arrives, from being lost.
-The hotkey selector and switches also send every valid request, including
+The other selectors and switches also send every valid request, including
 requests matching the last reported state, and wait for feedback before
 changing state.
 
@@ -174,6 +179,14 @@ target:
 action: button.press
 target:
   entity_id: button.your_kvm_sync_usb_hubs
+```
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.your_kvm_video_1_routing
+data:
+  option: Sync
 ```
 
 ```yaml
@@ -250,23 +263,24 @@ hubs. An independent hub Sync command remains unknown.
 For video, `v1p2` reports Video 1 fixed to port 2, `v1p0` reports Video 1
 in Sync, and `v0p0` reports all video in Sync. The user verified that
 `v1p2` pins Video 1 to machine 2 on both KVMs and `v1p0` restores only
-Video 1 while leaving another pinned output unchanged. The two video
-Sync buttons expose their individual versus global scope. The existing
-manual command action can send `h1p2` or `v1p2` for those tested fixed
-assignments. Other destination/output combinations remain unconfirmed.
+Video 1 while leaving another pinned output unchanged. The routing selects
+extend the command families to all four channels and both reported hub/video
+endpoints. Those sibling combinations follow the supplied command inventory
+and observed reply structures; they have not each been tested on hardware.
+The global video command `v0p0` remains available through the manual action,
+and its reply sets both Video 1 and Video 2 routing to Sync.
 
-Video 1 state remains unknown until a recognized routing reply arrives.
-The bare `V1P0` / `V1P1` tokens in the captured startup/status reports do
-not establish video routing state. Sync buttons also wait for received
-feedback before changing any sensor state. Routing sensors provide
-observed state alongside these action buttons; no stateful routing
-selector has been introduced yet.
+The [latest lowercase status capture](docs/commands.md#status-query-during-auto-scan)
+reports `Video1 : SYNC-mode` and `Video2 : SYNC-mode`. These now initialize
+both video routing controls when present in a status reply. The bare `V1P0`
+/ `V1P1` tokens in older reports remain unknown and do not establish video
+state. Routing selections continue to wait for device feedback.
 
 The [audio and scan capture](docs/commands.md#debug-capture-after-audio-and-auto-scan-commands)
 shows `o1` reporting audio routed to Channel 1 and `o0` reporting Sync.
-The Audio routing sensor recognizes both replies, and **Sync audio**
-sends the tested lowercase `o0`. Other fixed audio assignments remain
-unconfirmed; the manual command action can send the tested `o1`. The user
+The Audio routing select recognizes the same feedback forms and sends
+`o0` for Sync or `o1` through `o4` for fixed channels. Destinations beyond
+the directly tested Channel 1 follow the command pattern. The user
 verified audio from machine 1 with `o1`, audio following the selected
 channel with `o0`, and both audio routing and auto-scan affecting both
 linked KVMs.

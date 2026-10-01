@@ -42,6 +42,9 @@ far from the current Home Assistant setup:
 - The user's confirmation that the `UDP2_14AP_U3` identifier in a `k1p0`
   report identifies the retail model `UDP2-14AP`; response indicators for
   other models have not been supplied
+- A captured lowercase `s5` / `k1p0` / `s0` sequence on 2026-10-01 with
+  explicit Video 1 and Video 2 Sync state in the status report, but no
+  scan enabled-state or interval information in that report
 - The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
   comparison evidence rather than a ConnectPro protocol specification
 
@@ -56,7 +59,7 @@ yet established.
 The tables below preserve the original YAML setup as protocol evidence.
 The integration now implements channel and hotkey selection, buzzer and
 mouse channel-switching controls, auto-scan selection, the `W0` display
-action, and USB/video/audio Sync actions. It receives the listed state
+action, and audio/video/hub routing selectors. It receives the listed state
 feedback into native entities and offers a generic command action. See
 the [README](../README.md) for installation, migration, and logging
 instructions. The old helpers and shell actions are not required by the
@@ -697,26 +700,26 @@ Other output/port combinations and uppercase equivalents remain untested
 in these captures, even where the earlier shell command inventory lists
 similar spellings.
 
-The native parser recognizes the four new exact reply forms. The global
-video Sync reply updates the confirmed Video 1 state; it does not create
-additional video entities. The bare `V1P0` and `V1P1` tokens in the earlier
-`K1P0` reports remain unrecognized: they are different from these routing
-replies, and their meaning in those reports is still unknown. Those
-reports therefore do not currently initialize video routing state.
+The native parser recognizes the routing reply forms for both hub and
+video endpoints and all four destination channels. The bare `V1P0` and
+`V1P1` tokens in the earlier `K1P0` reports remain unrecognized: their
+meaning in those reports is still unknown. Those older reports do not
+initialize video routing state. The later
+[status query during auto-scan](#status-query-during-auto-scan) does supply
+explicit Video 1 and Video 2 routing replies, which now populate both
+controls. The global video Sync reply updates both video states together.
 
-The device page provides **Sync both USB hubs** (`h0p0`), **Sync video
-output 1** (`v1p0`), and **Sync all video outputs** (`v0p0`) buttons.
-Their names make the global versus individual scope explicit. Routing
-sensors retain the observed hub settings and add Video 1 routing. They
-remain necessary because these buttons request actions rather than select
-and report a complete routing setting. Fixed assignments such as `h1p2`
-and `v1p2` are available through the manual command action. Full routing
-selectors are deferred until additional destination/output combinations
-are established; no temporary Channel 2-only selectors are created.
+Routing controls are configuration selectors, as described under
+[routing configuration](#routing-configuration). Only **Sync both USB
+hubs** remains a routing button, since the individual hub selectors
+cannot independently restore Sync. Audio and video restore Sync through
+their own dropdowns. The manual command action can still send global
+`v0p0` when useful.
 
 The replay verifies all six writes, 14 reads, and seven complete reply
 lines. Hub 1 progresses from `Channel 2` to `Sync`, Hub 2 reports `Sync`,
-and Video 1 progresses from `Channel 2` to `Sync`. The final individual
+and Video 1 progresses from `Channel 2` to `Sync`; the global video Sync
+reply also supplies Video 2 `Sync` in the same update. The final individual
 video Sync reply repeats the state already reported by the global reply.
 There are five state-change notifications; `ERROR` remains a debug
 diagnostic without changing state or closing the connection. No write
@@ -796,10 +799,12 @@ The user subsequently verified `o1` routing audio from machine 1 and
 `o0` restoring audio following the selected channel. Audio routing and
 auto-scan affect both linked KVMs in this installation. The log does not
 identify which unit originated each serial reply. The Audio routing
-sensor now maps `AUDIO : CHANNEL1` to `Channel 1`, alongside the existing
-`Sync` mapping. **Sync audio** sends the tested lowercase `o0`; the manual
-command action can send `o1`. Other fixed audio destinations still need
-captured replies before a complete audio selector is introduced.
+select maps `AUDIO : CHANNEL1` to `Channel 1`, alongside the existing
+`Sync` mapping. The audio dropdown sends lowercase `o0` for Sync and
+`o1` through `o4` for fixed channels. Destinations beyond the directly
+tested Channel 1 follow the command family; their direct hardware
+verification remains an evidence gap rather than a restriction on the
+requested configuration control.
 
 Every nonzero scan command reports ON followed by its interval; it starts
 scanning rather than merely storing a duration. The native **Auto scan**
@@ -838,12 +843,97 @@ continued connection across the entire sequence. The duplicate manual
 `CH2` and the repeated ON during the direct interval change produce no
 additional state notification.
 
+### Status query during auto-scan
+
+The user supplied a new capture on 2026-10-01 with lowercase `s5`, followed
+by lowercase `k1p0`, then `s0`. The
+[capture fixture](../tests/fixtures/scan_status_debug_capture.json)
+preserves all 25 events (three writes and 22 reads), including duplicate
+read timestamps and split CR/LF boundaries. The 461 received bytes form
+22 complete lines.
+
+| Command | TX timestamp | Reported information |
+| --- | --- | --- |
+| `s5` | `13:11:11.389` | `Auto Scan : ON` and `Auto Scan : 5(30Sec)` |
+| `k1p0` | `13:11:18.928` | Nineteen status lines, including `Video1 : SYNC-mode` and `Video2 : SYNC-mode`; no auto-scan settings |
+| `s0` | `13:11:23.072` | `Auto Scan : OFF` |
+
+The lowercase status response runs from `13:11:18.938` to
+`13:11:18.972`. It contains the known U3 and DP version lines, `CH-2`,
+Ctrl hotkey, buzzer off, both hubs and audio Sync, mouse channel switching
+off, explicit Sync for both video outputs, and the eight known `K50_*`
+firmware lines. Unlike the earlier reports containing bare `V1P0` /
+`V1P1`, this report supplies video routing state directly. The original
+log marked Video 2 Sync unrecognized; the current parser recognizes it.
+
+There is no `Auto Scan` line in the `k1p0` response. ON and the 30-second
+interval belong to the preceding `s5`; OFF belongs to the later `s0`.
+The integration retains the last reported scan state during the query
+and updates it only when explicit scan feedback arrives. This does not
+establish whether the query physically changed scanning; no physical
+observation of that effect was supplied.
+
+This is also the first supplied raw capture of lowercase `k1p0`; the
+earlier lowercase initialization support was based on user confirmation
+and simulated feedback from uppercase captures. It is a manual status
+request rather than a capture of automatic startup. The replay verifies
+13 state-change notifications, both video states, unchanged scan settings
+through the status response, exact TX/RX logging, and no extra writes.
+The DP version line remains the sole unrecognized diagnostic, and the
+eight known firmware lines remain ignored.
+
+### Routing configuration
+
+Audio, Video 1, Video 2, Hub 1, and Hub 2 are native configuration selects.
+Each displays `Sync` or `Channel 1` through `Channel 4` from recognized
+feedback. A valid selection sends its command even if the last reported
+state matches, and state changes only from received replies.
+
+| Configuration item | Fixed channel `n` (1–4) | Sync selection |
+| --- | --- | --- |
+| Audio routing | `o{n}` (for example, `o2`) | `o0` |
+| Video 1 routing | `v1p{n}` (for example, `v1p2`) | `v1p0` |
+| Video 2 routing | `v2p{n}` (for example, `v2p2`) | `v2p0` |
+| Hub 1 routing | `h1p{n}` (for example, `h1p2`) | Blocked; use Sync both USB hubs |
+| Hub 2 routing | `h2p{n}` (for example, `h2p2`) | Blocked; use Sync both USB hubs |
+
+The hub dropdowns keep Sync among their options so a reported Sync state
+can be displayed. Home Assistant's native select interface has no
+per-option disabled flag. Requesting Sync raises a validation error
+explaining that both hubs must be synchronized through the shared button;
+it sends no command and changes no reported state. This protects manual
+selection and automation/selection services. It never synthesizes rejected
+`h1p0`, an unverified `h2p0`, or a silently global `h0p0` from a per-hub
+selection. The separate **Sync both USB hubs** button still sends `h0p0`.
+
+Command siblings for all four channels and both endpoints are implemented
+using the supplied sender inventory and the observed reply structures,
+at the user's request to expose complete routing configuration. Direct
+hardware evidence covers audio `o0` / `o1`, Hub 1 `h1p2`, the global hub
+reset `h0p0`, Video 1 `v1p2` / `v1p0`, global video `v0p0`, and the two
+explicit video Sync status lines. Other sibling combinations are pattern
+extensions, not new claims of captured hardware tests.
+
+The parser accepts `AUDIO : CHANNEL{n}`, `HUB1` / `HUB2` fixed routing
+`Async-> Channel {n}`, and `Video1` / `Video2` fixed routing
+`ASYNC-mode-Port{n}` only for channels 1–4, with the existing exact case and
+spacing. Individual Sync updates only its endpoint; `Video-ALL : SYNC-mode`
+updates both videos atomically. Unknown endpoint numbers, out-of-range
+channels, malformed reply forms, and bare video tokens remain unrecognized.
+
+The previous routing sensors and audio/video Sync buttons are removed;
+there are no compatibility sensor copies. Setup removes only their exact
+obsolete registry entries for this integration/config entry, preserving
+the new selects, retained buttons, device identity, and unrelated entities.
+Existing dashboards/automations should be changed to the new selectors.
+
 ### Automatic state initialization
 
 The user confirmed that lowercase `k1p0` can obtain current state for the
 entities after the integration is loaded, configured, and initialized.
-This confirmation is separate from the earlier raw uppercase `K1P0`
-captures; no new raw exchange accompanies it.
+This confirmation was separate from the earlier raw uppercase `K1P0`
+captures. The later [status query during auto-scan](#status-query-during-auto-scan)
+provides a raw lowercase exchange through the manual command action.
 
 The integration opens and configures the serial port, initializes the
 entity platforms, then starts its reader and sends `b'k1p0\r\n'` once on
@@ -868,7 +958,8 @@ and firmware diagnostics continue through the normal logging behavior.
 Lifecycle tests verify the initial request, received state, reconnect
 refresh, write-failure recovery, and shutdown. They reuse existing captured
 status bytes as a simulated initialization response, without claiming a
-new hardware capture of lowercase `k1p0`.
+hardware capture of automatic initialization. The later manual lowercase
+capture separately verifies its received status bytes.
 
 ## Dashboard and channel request behavior
 
@@ -939,9 +1030,9 @@ For select helpers, the automation calls `input_select.select_option` with
 the exact option shown below. For boolean helpers, it calls
 `input_boolean.turn_on` or `input_boolean.turn_off` as indicated. These
 helpers belong to the original hand-rolled setup. The integration exposes
-native channel, hotkey, and auto-scan selectors, buzzer and mouse
-channel-switching switches, and sensors for audio/hub/video routing instead
-of writing these helpers. Additional buttons request the tested Sync actions.
+native channel, hotkey, auto-scan, and audio/hub/video routing selectors,
+buzzer and mouse channel-switching switches, and the shared hub Sync button
+instead of writing these helpers.
 The earlier read-only hotkey, buzzer, and mouse entities are removed during
 prerelease development; each control also reports its observed state.
 
@@ -1061,20 +1152,20 @@ and change only from recognized feedback. They do not track separate
 state for linked KVMs. Converted settings have no compatibility sensors;
 the binary sensor platform and the earlier hotkey sensor are removed.
 
-Routing feedback now recognizes Hub 1 fixed to `Channel 2`, Video 1 fixed
-to `Channel 2`, and individual/global video Sync. Audio and hub routing
-sensors remain, and a Video 1 routing sensor is added. The three routing
-buttons send exact tested lowercase commands: `h0p0` restores both USB
-hubs to Sync, `v1p0` restores Video 1, and `v0p0` restores all video
-outputs. Only recognized replies update routing state. No button sends
-the rejected `h1p0`, and the global video Sync reply updates only the
-confirmed Video 1 state rather than creating untested video entities.
+Audio, both video outputs, and both hubs have configuration dropdowns for
+Sync or Channel 1–4. Audio/video Sync selections send their independent
+commands. Per-hub Sync requests are rejected without writing and direct
+the user to **Sync both USB hubs** (`h0p0`). The earlier routing sensors
+and audio/video Sync buttons are removed, including their obsolete registry
+entries. Each routing control reports received state; there are no
+compatibility sensors. See [routing configuration](#routing-configuration)
+for command mappings and the distinction between direct captures and
+command-family extensions.
 
-Audio also recognizes the tested `Channel 1` reply. **Sync audio** sends
-`o0`, alongside the audio routing sensor; fixed `o1` routing remains
-available through the manual command action. This stateless button does
-not replace a stateful setting, so the sensor remains the current-state
-entity rather than a compatibility copy.
+The latest lowercase status report provides both video outputs in Sync;
+older bare video tokens remain unknown. Global video Sync updates both
+outputs together, while individual video replies update only their own
+output. That global command remains available through the manual action.
 
 The Auto scan selector sends `s0` through `s5` for Off or one of the five
 reported durations. Every duration selection starts scanning. Only
@@ -1087,9 +1178,9 @@ automatically select a board.
 Every valid channel selection sends a command, including a selection
 that matches the last observed channel. Unlike the old script's guard,
 this allows a quick change and change back before the first response
-arrives. Additional audio destinations and hub/video combinations remain
-unconfirmed. Their payloads stay in the command catalog for further
-verification. The `connectpro.send_command` action accepts a ConnectPro
+arrives. Additional audio/hub/video combinations follow their command
+families and remain candidates for further hardware verification. The
+`connectpro.send_command` action accepts a ConnectPro
 `device_id` and a single printable ASCII command line under `data`, and
 appends CRLF. This
 provides a way to use known commands while collecting evidence for
@@ -1155,8 +1246,8 @@ To complete the reference, collect:
   machine 2, both-hub Sync, and individual/global video Sync are recorded
   above. Whether an independent hub Sync command exists remains open;
   `h1p0` is rejected in this installation.
-- Audio destinations beyond the tested Channel 1, video routing in status
-  reports, and model indicators for other KVMs and firmware versions to
+- Audio destinations beyond the directly tested Channel 1, additional
+  video status modes, and model indicators for other KVMs and firmware versions to
   identify the scope of the observed behavior. `UDP2_14AP_U3` now identifies
   `UDP2-14AP`. Bare `V1P0` / `V1P1` report tokens do not yet provide
   video state.

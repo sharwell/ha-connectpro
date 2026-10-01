@@ -1107,7 +1107,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         hub1_sync = {"hub1": "Sync"}
         both_hubs_sync = {"hub1": "Sync", "hub2": "Sync"}
         video_async = both_hubs_sync | {"video1": "Channel 2"}
-        video_sync = both_hubs_sync | {"video1": "Sync"}
+        video_sync = both_hubs_sync | {"video1": "Sync", "video2": "Sync"}
         states_by_complete_lines = [
             {},
             hub1_async,
@@ -1443,6 +1443,178 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 for _, direction, payload in events
             ],
         )
+
+    async def test_scan_status_capture_preserves_scan_state_and_reports_both_videos(
+        self,
+    ) -> None:
+        """The captured lowercase query reports video routes without scan state."""
+        capture = json.loads(
+            (
+                Path(__file__).parent / "fixtures" / "scan_status_debug_capture.json"
+            ).read_text(encoding="utf-8")
+        )
+        events = [
+            (event["direction"], event["ascii"].encode("ascii"))
+            for event in capture["events"]
+        ]
+        expected_commands = [b"s5\r\n", b"k1p0\r\n", b"s0\r\n"]
+        self.assertEqual(len(events), 25)
+        self.assertEqual(sum(direction == "RX" for direction, _ in events), 22)
+        self.assertEqual(
+            sum(len(payload) for direction, payload in events if direction == "RX"),
+            461,
+        )
+        self.assertEqual(
+            [payload for direction, payload in events if direction == "TX"],
+            expected_commands,
+        )
+        self.assertEqual(capture["events"][10]["time"], capture["events"][11]["time"])
+        report_bytes = b"".join(payload for _, payload in events[8:22])
+        self.assertEqual(report_bytes.count(b"\r\n"), 19)
+        self.assertNotIn(b"Auto Scan", report_bytes)
+        self.assertNotIn(b"V1P0", report_bytes)
+        self.assertNotIn(b"V1P1", report_bytes)
+        expected_reports = [
+            ("Auto Scan : ON", {"auto_scan": True}),
+            ("Auto Scan : 5(30Sec)", {"auto_scan_interval": "30 seconds"}),
+            ("UDP2_14AP_U3 : Version_Number - 0009 - D1223", {"model": "UDP2-14AP"}),
+            ("UDP2_14AP_DP : Version_Number - 0009 - D1223", {}),
+            ("CH-2", {"channel": "Channel 2"}),
+            ("Hot KEY : CTRL", {"hotkey": "Ctrl"}),
+            ("Buzzer : OFF", {"buzzer": False}),
+            ("HUB1 : Sync", {"hub1": "Sync"}),
+            ("HUB2 : Sync", {"hub2": "Sync"}),
+            ("AUDIO : Sync", {"audio": "Sync"}),
+            ("Mouse change channel : OFF", {"mouse_change_channel": False}),
+            ("Video1 : SYNC-mode", {"video1": "Sync"}),
+            ("Video2 : SYNC-mode", {"video2": "Sync"}),
+            *[(f"K50_{index} FW Ver B1.42", {}) for index in range(8)],
+            ("Auto Scan : OFF", {"auto_scan": False}),
+        ]
+        states_by_complete_lines = [{}]
+        for _, update in expected_reports:
+            states_by_complete_lines.append(states_by_complete_lines[-1] | update)
+        update_counts_by_complete_lines = [
+            0,
+            1,
+            2,
+            3,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            12,
+            12,
+            12,
+            12,
+            12,
+            12,
+            12,
+            12,
+            13,
+        ]
+        self.client = ConnectProClient(SerialSettings(capture["device"]))
+        await self.client.async_connect()
+        observed = []
+        self.client.add_listener(lambda: observed.append(dict(self.client.state)))
+        expected_writes = []
+        received = bytearray()
+
+        with (
+            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
+            patch.object(
+                client_module, "parse_response", wraps=client_module.parse_response
+            ) as parse,
+        ):
+            # Replay only the three manual writes recorded in this capture.
+            task = self.start_reader(initialize_state=False)
+            for index, (direction, payload) in enumerate(events):
+                if direction == "TX":
+                    await self.client.async_send_command(
+                        payload.removesuffix(b"\r\n").decode("ascii")
+                    )
+                    expected_writes.append(payload)
+                else:
+                    self.reader.feed_data(payload)
+                    received.extend(payload)
+                await asyncio.sleep(0)
+                # CR completes CH-2 and one firmware line before the next LF read.
+                complete_lines = [
+                    line.decode("ascii").strip()
+                    for line in bytes(received).replace(b"\r", b"\n").split(b"\n")[:-1]
+                    if line
+                ]
+                self.assertEqual(
+                    complete_lines,
+                    [line for line, _ in expected_reports[: len(complete_lines)]],
+                )
+                self.assertEqual(
+                    [call.args[0] for call in parse.call_args_list], complete_lines
+                )
+                self.assertEqual(
+                    self.client.state, states_by_complete_lines[len(complete_lines)]
+                )
+                self.assertEqual(
+                    len(observed), update_counts_by_complete_lines[len(complete_lines)]
+                )
+                self.assertEqual(self.writer.writes, expected_writes)
+                if 7 <= index < len(events) - 1:
+                    self.assertIs(self.client.state["auto_scan"], True)
+                    self.assertEqual(
+                        self.client.state["auto_scan_interval"], "30 seconds"
+                    )
+
+        self.assertEqual(parse.call_count, 22)
+        self.assertEqual(len(observed), 13)
+        self.assertEqual(
+            self.client.state,
+            {
+                "auto_scan": False,
+                "auto_scan_interval": "30 seconds",
+                "model": "UDP2-14AP",
+                "channel": "Channel 2",
+                "hotkey": "Ctrl",
+                "buzzer": False,
+                "hub1": "Sync",
+                "hub2": "Sync",
+                "audio": "Sync",
+                "mouse_change_channel": False,
+                "video1": "Sync",
+                "video2": "Sync",
+            },
+        )
+        self.assertTrue(self.client.connected)
+        self.assertFalse(task.done())
+        self.assertEqual(self.writer.writes, expected_commands)
+        self.opener.assert_awaited_once()
+        messages = [record.getMessage() for record in captured.records]
+        path = capture["device"]
+        self.assertEqual(
+            [
+                message
+                for message in messages
+                if message.startswith((f"TX {path}: ", f"RX {path}: "))
+            ],
+            [f"{direction} {path}: {payload!r}" for direction, payload in events],
+        )
+        self.assertEqual(
+            [message for message in messages if "unrecognized line" in message],
+            [f"RX {path} unrecognized line: {expected_reports[3][0]!r}"],
+        )
+        self.assertEqual(
+            [message for message in messages if "ignored line" in message],
+            [
+                f"RX {path} ignored line: 'K50_{index} FW Ver B1.42'"
+                for index in range(8)
+            ],
+        )
+        self.assertEqual(len(messages), 34)
 
     async def test_scan_interval_feedback_does_not_imply_scan_enabled(self) -> None:
         """Simulated standalone timing replies leave on/off feedback independent."""

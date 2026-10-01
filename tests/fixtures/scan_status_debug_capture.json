@@ -1,0 +1,137 @@
+{
+  "source": "User-provided Home Assistant ConnectPro debug log",
+  "timestamp_date": "2026-10-01",
+  "timezone": null,
+  "device": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0",
+  "capture_notes": "The first captured lowercase k1p0 exchange. Exact raw bytes and read boundaries are preserved, including separate reads with the same timestamp and CR/LF split across reads.",
+  "original_diagnostics": "The original log classified the DP version line and Video2 : SYNC-mode as unrecognized and the eight K50 firmware lines as ignored. These diagnostic records are separate from the raw events.",
+  "current_interpretation": "The parser now recognizes Video2 : SYNC-mode. The nineteen-line status report provides explicit Video1 and Video2 Sync replies, in place of the earlier captures' bare V1P0/V1P1 tokens, and contains no auto-scan on/off or interval reply.",
+  "evidence_scope": "No physical observation of scanning during the query was supplied. Missing scan replies do not establish whether the query leaves scanning running or stops it. The integration retains the last reported ON and 30-second interval until the later OFF reply.",
+  "events": [
+    {
+      "time": "13:11:11.389",
+      "direction": "TX",
+      "ascii": "s5\r\n"
+    },
+    {
+      "time": "13:11:11.409",
+      "direction": "RX",
+      "ascii": "A"
+    },
+    {
+      "time": "13:11:11.411",
+      "direction": "RX",
+      "ascii": "uto Scan : "
+    },
+    {
+      "time": "13:11:11.412",
+      "direction": "RX",
+      "ascii": "ON\r\n"
+    },
+    {
+      "time": "13:11:11.436",
+      "direction": "RX",
+      "ascii": "Auto S"
+    },
+    {
+      "time": "13:11:11.437",
+      "direction": "RX",
+      "ascii": "can : 5(30Se"
+    },
+    {
+      "time": "13:11:11.439",
+      "direction": "RX",
+      "ascii": "c)\r\n"
+    },
+    {
+      "time": "13:11:18.928",
+      "direction": "TX",
+      "ascii": "k1p0\r\n"
+    },
+    {
+      "time": "13:11:18.938",
+      "direction": "RX",
+      "ascii": "UDP2_14AP_U3 : V"
+    },
+    {
+      "time": "13:11:18.941",
+      "direction": "RX",
+      "ascii": "ersion_Number - 0009 - D1223 \r\nUDP2_14AP_DP : Version_Number - 0009 - D1223 \r\nCH-2\r"
+    },
+    {
+      "time": "13:11:18.946",
+      "direction": "RX",
+      "ascii": "\nHot KEY : CTRL\r\n"
+    },
+    {
+      "time": "13:11:18.946",
+      "direction": "RX",
+      "ascii": "Buzzer : OFF\r\nHUB1 : Sync\r\nHUB2 : Syn"
+    },
+    {
+      "time": "13:11:18.949",
+      "direction": "RX",
+      "ascii": "c\r\nAU"
+    },
+    {
+      "time": "13:11:18.951",
+      "direction": "RX",
+      "ascii": "DIO : Sync\r\nMouse change cha"
+    },
+    {
+      "time": "13:11:18.953",
+      "direction": "RX",
+      "ascii": "nnel : OFF\r\nVideo1 :"
+    },
+    {
+      "time": "13:11:18.957",
+      "direction": "RX",
+      "ascii": " SYNC-mode\r\nVideo2 : "
+    },
+    {
+      "time": "13:11:18.959",
+      "direction": "RX",
+      "ascii": "SYNC-mode\r\nK50_0 FW Ver B1.42 \r\n"
+    },
+    {
+      "time": "13:11:18.960",
+      "direction": "RX",
+      "ascii": "K50_1 FW Ver B1.42 \r\nK50_2 FW "
+    },
+    {
+      "time": "13:11:18.961",
+      "direction": "RX",
+      "ascii": "Ver B1.42 \r"
+    },
+    {
+      "time": "13:11:18.962",
+      "direction": "RX",
+      "ascii": "\nK50_3 FW "
+    },
+    {
+      "time": "13:11:18.970",
+      "direction": "RX",
+      "ascii": "Ver B1.42 \r\n"
+    },
+    {
+      "time": "13:11:18.972",
+      "direction": "RX",
+      "ascii": "K50_4 FW Ver B1.42 \r\nK50_5 FW Ver B1.42 \r\nK50_6 FW Ver B1.42 \r\nK50_7 FW Ver B1.42 \r\n"
+    },
+    {
+      "time": "13:11:23.072",
+      "direction": "TX",
+      "ascii": "s0\r\n"
+    },
+    {
+      "time": "13:11:23.094",
+      "direction": "RX",
+      "ascii": "Auto Scan : "
+    },
+    {
+      "time": "13:11:23.096",
+      "direction": "RX",
+      "ascii": "OFF\r\n"
+    }
+  ]
+}
