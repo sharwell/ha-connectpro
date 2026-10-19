@@ -310,6 +310,29 @@ same capture records `v3p0` returning `ERROR`.
 
 ## Debugging serial communication
 
+### Dependency errors after a Home Assistant update
+
+Home Assistant 2026.10.2
+[requires `serialx==1.11.0`](https://github.com/home-assistant/core/blob/2026.10.2/homeassistant/package_constraints.txt).
+Older ConnectPro
+versions pinned `serialx==1.10.0`, preventing setup after the update because
+Home Assistant cannot install both versions. ConnectPro now accepts
+`serialx>=1.10.0,<2.0.0`, allowing Home Assistant to keep its compatible
+version. The upper bound reserves a new major release for compatibility
+review.
+
+If the log reports `Requirements for connectpro not found` with the old
+pin, install the corrected integration files and restart Home Assistant.
+For a manual installation, replace `custom_components/connectpro` in your
+Home Assistant configuration directory with this repository's copy. Saved
+device settings and entities do not need to be removed or recreated.
+
+This failure happens before the integration loads, so enabling its debug
+logging cannot fix it. If requirements still fail with the updated files,
+check the preceding package-installation log for the specific cause.
+
+### Communication logs
+
 Open **Settings > Devices & services > ConnectPro KVM**, open the three-dot
 menu, and choose **Enable debug logging**. Reproduce the issue, then choose
 **Disable debug logging** to download the log, following
@@ -345,9 +368,18 @@ Turn debug logging off when finished.
 ## Development notes
 
 The serial protocol reference and remaining information gaps are in
-[docs/commands.md](docs/commands.md). The transport uses `serialx==1.10.0`.
-Tests cover Home Assistant 2024.12.5 and simulated
-serial communication; they do not replace hardware verification.
+[docs/commands.md](docs/commands.md). The transport uses
+`serialx>=1.10.0,<2.0.0`. Keep this range in sync between the manifest and
+`requirements-test.txt`; an exact pin can conflict with Home Assistant's
+own package constraints during an upgrade.
+
+Tests use Home Assistant 2024.12.5 and simulated serial communication;
+they do not replace hardware verification. CI runs against serialx 1.10.0,
+1.11.0 (the version required by Home Assistant 2026.10.2), and the latest
+matching 1.x release. Dependency-loading regression tests also verify that
+Home Assistant accepts an already-installed compatible version without
+attempting to replace it. These library checks do not constitute a full
+test against Home Assistant 2026.10.2.
 
 Create a virtual environment and run the checks from the repository root
 (PowerShell):

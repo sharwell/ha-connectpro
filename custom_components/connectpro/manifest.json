@@ -5,6 +5,6 @@
   "documentation": "https://github.com/sharwell/ha-connectpro",
   "issue_tracker": "https://github.com/sharwell/ha-connectpro/issues",
   "version": "0.2.0",
-  "requirements": ["serialx==1.10.0"],
+  "requirements": ["serialx>=1.10.0,<2.0.0"],
   "iot_class": "local_push"
 }
