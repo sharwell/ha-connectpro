@@ -2,7 +2,7 @@
   "source": "User-provided Home Assistant ConnectPro debug log",
   "timestamp_date": "2026-10-01",
   "timezone": null,
-  "device": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0",
+  "device": "/dev/test-kvm",
   "user_context": "Results from manually sending u0, u1, and u2; no physical UART scope observation was supplied.",
   "overlap": "The opening v1p0 exchange also appears in routing_debug_capture.json and is preserved here as part of the supplied chronology.",
   "diagnostic_context": "The original log classified Video1 : SYNC-mode as unrecognized; the current parser recognizes it. UART, version, Ready-0, and ERROR replies remain diagnostics without entity-state mappings.",

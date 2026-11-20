@@ -1,715 +1,403 @@
-"""Entity behavior against Home Assistant's real entity classes."""
+"""Observe ConnectPro through HA services, state, events, and registries."""
 
-from __future__ import annotations
-
-from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass, field
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
+import asyncio
 
 import pytest
-import pytest_asyncio
 
-from custom_components.connectpro import (
-    PLATFORMS,
-    button,
-    select,
-    switch,
-)
-from custom_components.connectpro.button import (
-    ConnectProResetButton,
-    ConnectProRoutingSyncButton,
-)
 from custom_components.connectpro.const import DOMAIN
-from custom_components.connectpro.entity import ConnectProEntity
-from custom_components.connectpro.select import (
-    ConnectProAutoScanSelect,
-    ConnectProChannelSelect,
-    ConnectProHotkeySelect,
-    ConnectProRoutingSelect,
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import (
+    EVENT_STATE_CHANGED,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    EntityCategory,
 )
-from custom_components.connectpro.switch import (
-    ConnectProBuzzerSwitch,
-    ConnectProMouseChannelSwitch,
-)
-from homeassistant.const import EntityCategory, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
-
-@dataclass
-class FakeClient:
-    """Provide the serial client's state and subscription contract."""
-
-    connected: bool = True
-    state: dict[str, str | bool] = field(default_factory=dict)
-    commands: list[str] = field(default_factory=list)
-    listeners: list[Callable[[], None]] = field(default_factory=list)
-    send_error: Exception | None = None
-
-    def add_listener(self, callback: Callable[[], None]) -> Callable[[], None]:
-        """Record a subscription and return its cleanup callback."""
-        self.listeners.append(callback)
-
-        def unsubscribe() -> None:
-            self.listeners.remove(callback)
-
-        return unsubscribe
-
-    async def async_send_command(self, command: str) -> None:
-        """Record a command or simulate a transport error."""
-        if self.send_error is not None:
-            raise self.send_error
-        self.commands.append(command)
-
-    def notify(self) -> None:
-        """Deliver an observed state or connection update."""
-        for callback in tuple(self.listeners):
-            callback()
+STARTUP_QUERY = b"k1p0\r\n"
+CHANNELS = [f"Channel {n}" for n in range(1, 5)]
+HOTKEYS = [
+    ("Ctrl", b"ctrl", b"Hot KEY : CTRL"),
+    ("Shift", b"shift", b"Hot KEY : SHIFT"),
+    ("Scroll Lock", b"scroll", b"Hot KEY : SCROLL"),
+    ("Caps Lock", b"caps", b"Hot KEY : CAPS"),
+]
+SCAN_SETTINGS = [
+    ("Off", b"s0", b"Auto Scan : OFF"),
+    ("5 seconds", b"s1", b"Auto Scan : ON\r\nAuto Scan : 1(5sec)"),
+    ("8 seconds", b"s2", b"Auto Scan : ON\r\nAuto Scan : 2(8Sec)"),
+    ("15 seconds", b"s3", b"Auto Scan : ON\r\nAuto Scan : 3(15Sec)"),
+    ("20 seconds", b"s4", b"Auto Scan : ON\r\nAuto Scan : 4(20Sec)"),
+    ("30 seconds", b"s5", b"Auto Scan : ON\r\nAuto Scan : 5(30Sec)"),
+]
+# Request and reply spellings are protocol expectations, independent of
+# the integration's command lookup tables and parser.
+ROUTES = [
+    ("audio", "o", "AUDIO : CHANNEL{}", "AUDIO : Sync"),
+    ("video1", "v1p", "Video1 : ASYNC-mode-Port{}", "Video1 : SYNC-mode"),
+    ("video2", "v2p", "Video2 : ASYNC-mode-Port{}", "Video2 : SYNC-mode"),
+    ("hub1", "h1p", "HUB1 : Async-> Channel {}", "HUB1 : Sync"),
+    ("hub2", "h2p", "HUB2 : Async-> Channel {}", "HUB2 : Sync"),
+]
+SWITCHES = [
+    ("buzzer", b"BZON", b"BZOFF", b"BZON", b"BZOFF"),
+    (
+        "mouse_change_channel",
+        b"M1",
+        b"M0",
+        b"Mouse change channel : ON",
+        b"Mouse change channel : OFF",
+    ),
+]
 
 
 @pytest.fixture
-def client() -> FakeClient:
-    """Return a connected client without observed state."""
-    return FakeClient()
+async def kvm(hass, add_entry, serial_ports):
+    entry = await add_entry()
+    assert entry.state is ConfigEntryState.LOADED, entry.reason
+    (port,) = serial_ports.sessions["test-kvm"]
+    await asyncio.wait_for(port.reader.reading.wait(), 2)
+    return entry, port
 
 
-@pytest.fixture
-def entry(client: FakeClient) -> SimpleNamespace:
-    """Return only the config entry fields the entities consume."""
-    return SimpleNamespace(entry_id="entry-1", title="Desktop KVM", runtime_data=client)
+def find_entity(hass, entry, domain, key):
+    entity_id = er.async_get(hass).async_get_entity_id(
+        domain, DOMAIN, f"{entry.entry_id}_{key}"
+    )
+    assert entity_id is not None, f"Missing {domain} entity for {key}"
+    return entity_id
 
 
-@pytest_asyncio.fixture
-async def hass(tmp_path: Path) -> AsyncGenerator[HomeAssistant]:
-    """Provide Home Assistant for entity lifecycle cleanup."""
-    instance = HomeAssistant(str(tmp_path))
-    try:
-        yield instance
-    finally:
-        await instance.async_stop(force=True)
+def state(hass, entity_id):
+    return hass.states.get(entity_id).state
 
 
-@pytest.mark.asyncio
+async def call(hass, entity_id, action, **data):
+    domain = entity_id.split(".", 1)[0]
+    await hass.services.async_call(
+        domain, action, {"entity_id": entity_id, **data}, blocking=True
+    )
+
+
 @pytest.mark.parametrize("channel", range(1, 5))
-async def test_channel_selection_waits_for_observed_state(
-    entry: SimpleNamespace, client: FakeClient, channel: int
-) -> None:
-    """Commands use the confirmed spelling without changing cached state."""
-    entity = ConnectProChannelSelect(entry)
-    assert entity.options == ["Channel 1", "Channel 2", "Channel 3", "Channel 4"]
-    assert entity.current_option is None
+async def test_channel_selection_waits_for_feedback(hass, kvm, channel):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", "channel")
+    assert hass.states.get(entity_id).attributes["options"] == CHANNELS
+    assert state(hass, entity_id) == STATE_UNKNOWN
 
-    await entity.async_select_option(f"Channel {channel}")
+    await call(hass, entity_id, "select_option", option=f"Channel {channel}")
 
-    assert client.commands == [f"Ch{channel}"]
-    assert entity.current_option is None
-    client.state["channel"] = f"Channel {channel}"
-    assert entity.current_option == f"Channel {channel}"
+    assert port.writes == [STARTUP_QUERY, f"Ch{channel}\r\n".encode()]
+    assert state(hass, entity_id) == STATE_UNKNOWN
+    await port.reader.receive(f"CH-{channel}\r\n".encode())
+    assert state(hass, entity_id) == f"Channel {channel}"
 
 
-@pytest.mark.asyncio
-async def test_channel_change_back_before_confirmation_is_not_dropped(
-    entry: SimpleNamespace, client: FakeClient
-) -> None:
-    """The latest selection wins even when it equals a stale observed channel."""
-    client.state["channel"] = "Channel 2"
-    entity = ConnectProChannelSelect(entry)
-
-    await entity.async_select_option("Channel 3")
-    await entity.async_select_option("Channel 2")
-    assert client.commands == ["Ch3", "Ch2"]
-    assert entity.current_option == "Channel 2"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("option", ["Channel 0", "Channel 5", "channel 1", "Ch1", ""])
-async def test_channel_rejects_invalid_options_without_writing(
-    entry: SimpleNamespace, client: FakeClient, option: str
-) -> None:
-    """Invalid options never become arbitrary serial commands."""
-    with pytest.raises(ServiceValidationError, match="Unsupported ConnectPro channel"):
-        await ConnectProChannelSelect(entry).async_select_option(option)
-    assert client.commands == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("initial_state", [None, "Ctrl"])
-@pytest.mark.parametrize(
-    ("option", "command"),
-    [
-        ("Ctrl", "ctrl"),
-        ("Shift", "shift"),
-        ("Scroll Lock", "scroll"),
-        ("Caps Lock", "caps"),
-    ],
-)
-async def test_hotkey_selection_sends_tested_commands_and_waits_for_feedback(
-    entry: SimpleNamespace,
-    client: FakeClient,
-    initial_state: str | None,
-    option: str,
-    command: str,
-) -> None:
-    """Exact lowercase commands never optimistically replace observed state."""
-    if initial_state is not None:
-        client.state["hotkey"] = initial_state
-    entity = ConnectProHotkeySelect(entry)
-    assert entity.options == ["Ctrl", "Shift", "Scroll Lock", "Caps Lock"]
-    assert entity.current_option == initial_state
-
-    await entity.async_select_option(option)
-
-    assert client.commands == [command]
-    assert entity.current_option == initial_state
-    client.state["hotkey"] = option
-    assert entity.current_option == option
-
-
-@pytest.mark.asyncio
-async def test_hotkey_change_back_before_feedback_is_not_dropped(
-    entry: SimpleNamespace, client: FakeClient
-) -> None:
-    """A request matching stale feedback still follows the intervening request."""
-    client.state["hotkey"] = "Ctrl"
-    entity = ConnectProHotkeySelect(entry)
-
-    await entity.async_select_option("Shift")
-    await entity.async_select_option("Ctrl")
-
-    assert client.commands == ["shift", "ctrl"]
-    assert entity.current_option == "Ctrl"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("option", ["ctrl", "CTRL", "Scroll", "Alt", "", "shift\r\n"])
-async def test_hotkey_rejects_invalid_options_without_writing(
-    entry: SimpleNamespace, client: FakeClient, option: str
-) -> None:
-    """Only the four supported options can produce a hotkey command."""
-    with pytest.raises(ServiceValidationError, match="Unsupported ConnectPro hotkey"):
-        await ConnectProHotkeySelect(entry).async_select_option(option)
-    assert client.commands == []
-
-
-@pytest.mark.parametrize("value", ["ALT", "CTRL", "", True, False])
-def test_hotkey_unrecognized_state_remains_unknown(
-    entry: SimpleNamespace, client: FakeClient, value: str | bool
-) -> None:
-    """Unsupported observed values are not exposed as selectable options."""
-    client.state["hotkey"] = value
-    assert ConnectProHotkeySelect(entry).current_option is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("entity_type", "option"),
-    [
-        (ConnectProChannelSelect, "Channel 3"),
-        (ConnectProHotkeySelect, "Shift"),
-        (ConnectProAutoScanSelect, "8 seconds"),
-    ],
-)
-@pytest.mark.parametrize(
-    ("error", "expected_type"),
-    [
-        (ConnectionError("disconnected"), HomeAssistantError),
-        (OSError("write failed"), HomeAssistantError),
-        (TimeoutError("write timed out"), HomeAssistantError),
-        (ValueError("invalid command"), ServiceValidationError),
-    ],
-)
-async def test_command_errors_are_exposed_as_home_assistant_errors(
-    entry: SimpleNamespace,
-    client: FakeClient,
-    entity_type: type,
-    option: str,
-    error: Exception,
-    expected_type: type[HomeAssistantError],
-) -> None:
-    """Transport failures reach callers without optimistic state changes."""
-    client.send_error = error
-    entity = entity_type(entry)
-
-    with pytest.raises(expected_type, match=str(error)) as raised:
-        await entity.async_select_option(option)
-
-    assert raised.value.__cause__ is error
-    assert entity.current_option is None
-    assert client.commands == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("option", "command"),
-    [
-        ("Off", "s0"),
-        ("5 seconds", "s1"),
-        ("8 seconds", "s2"),
-        ("15 seconds", "s3"),
-        ("20 seconds", "s4"),
-        ("30 seconds", "s5"),
-    ],
-)
-async def test_auto_scan_sends_tested_commands_and_waits_for_feedback(
-    entry: SimpleNamespace, client: FakeClient, option: str, command: str
-) -> None:
-    """Every valid selection sends its exact command without optimistic state."""
-    client.state.update({"auto_scan": True, "auto_scan_interval": "5 seconds"})
-    entity = ConnectProAutoScanSelect(entry)
-    assert entity.options == [
-        "Off",
-        "5 seconds",
-        "8 seconds",
-        "15 seconds",
-        "20 seconds",
-        "30 seconds",
+@pytest.mark.parametrize(("option", "command", "reply"), HOTKEYS)
+@pytest.mark.parametrize("initial", [STATE_UNKNOWN, "Ctrl"])
+async def test_hotkey_waits_for_reported_mode(
+    hass, kvm, option, command, reply, initial
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", "hotkey")
+    assert hass.states.get(entity_id).attributes["options"] == [
+        row[0] for row in HOTKEYS
     ]
-    before = client.state.copy()
+    if initial == "Ctrl":
+        await port.reader.receive(b"Hot KEY : CTRL\r\n")
+    assert state(hass, entity_id) == initial
 
-    await entity.async_select_option(option)
+    await call(hass, entity_id, "select_option", option=option)
 
-    assert client.commands == [command]
-    assert client.state == before
-    assert entity.current_option == "5 seconds"
-    client.state["auto_scan"] = option != "Off"
-    if option != "Off":
-        client.state["auto_scan_interval"] = option
-    assert entity.current_option == option
+    assert port.writes == [STARTUP_QUERY, command + b"\r\n"]
+    assert state(hass, entity_id) == initial
+    await port.reader.receive(reply + b"\r\n")
+    assert state(hass, entity_id) == option
+
+
+@pytest.mark.parametrize(("option", "command", "reply"), SCAN_SETTINGS)
+async def test_scan_selection_waits_for_feedback(hass, kvm, option, command, reply):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", "auto_scan")
+    assert hass.states.get(entity_id).attributes["options"] == [
+        row[0] for row in SCAN_SETTINGS
+    ]
+    await port.reader.receive(b"Auto Scan : ON\r\nAuto Scan : 1(5sec)\r\n")
+
+    await call(hass, entity_id, "select_option", option=option)
+
+    assert port.writes == [STARTUP_QUERY, command + b"\r\n"]
+    assert state(hass, entity_id) == "5 seconds"
+    await port.reader.receive(reply + b"\r\n")
+    assert state(hass, entity_id) == option
 
 
 @pytest.mark.parametrize(
-    ("observed_state", "expected"),
+    ("feedback", "expected"),
     [
-        ({}, None),
-        ({"auto_scan": True}, None),
-        ({"auto_scan_interval": "5 seconds"}, None),
-        ({"auto_scan": False, "auto_scan_interval": "8 seconds"}, "Off"),
-        ({"auto_scan": True, "auto_scan_interval": "15 seconds"}, "15 seconds"),
-        ({"auto_scan": True, "auto_scan_interval": "Off"}, None),
-        ({"auto_scan": True, "auto_scan_interval": "1 minute"}, None),
+        (b"Auto Scan : ON", STATE_UNKNOWN),
+        (b"Auto Scan : 1(5sec)", STATE_UNKNOWN),
+        (b"Auto Scan : 2(8Sec)\r\nAuto Scan : OFF", "Off"),
+        (b"Auto Scan : ON\r\nAuto Scan : 3(15Sec)", "15 seconds"),
+        (b"Auto Scan : ON\r\nAuto Scan : 6(1Min)", STATE_UNKNOWN),
     ],
 )
-def test_auto_scan_requires_explicit_scan_state_and_recognized_timing(
-    entry: SimpleNamespace,
-    client: FakeClient,
-    observed_state: dict[str, str | bool],
-    expected: str | None,
-) -> None:
-    """Partial feedback remains unknown; explicit Off overrides cached timing."""
-    client.state.update(observed_state)
-    assert ConnectProAutoScanSelect(entry).current_option == expected
-    assert client.commands == []
+async def test_scan_needs_explicit_enabled_state_and_supported_interval(
+    hass, kvm, feedback, expected
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", "auto_scan")
+
+    await port.reader.receive(feedback + b"\r\n")
+
+    assert state(hass, entity_id) == expected
+    assert port.writes == [STARTUP_QUERY]
 
 
-@pytest.mark.asyncio
-async def test_auto_scan_change_back_before_feedback_is_not_dropped(
-    entry: SimpleNamespace, client: FakeClient
-) -> None:
-    """A stale reported interval never suppresses the latest request."""
-    client.state.update({"auto_scan": True, "auto_scan_interval": "5 seconds"})
-    entity = ConnectProAutoScanSelect(entry)
-
-    await entity.async_select_option("8 seconds")
-    await entity.async_select_option("5 seconds")
-
-    assert client.commands == ["s2", "s1"]
-    assert entity.current_option == "5 seconds"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("option", ["On", "off", "5", "6 seconds", ""])
-async def test_auto_scan_rejects_unconfirmed_options(
-    entry: SimpleNamespace, client: FakeClient, option: str
-) -> None:
-    """Invalid names cannot produce guessed timing commands."""
-    with pytest.raises(
-        ServiceValidationError, match="Unsupported ConnectPro scan setting"
-    ):
-        await ConnectProAutoScanSelect(entry).async_select_option(option)
-    assert client.commands == []
-
-
-@pytest.mark.asyncio
-async def test_reset_button_sends_exact_command(
-    entry: SimpleNamespace, client: FakeClient
-) -> None:
-    """The reset button preserves the existing W0 control."""
-    entity = ConnectProResetButton(entry)
-    await entity.async_press()
-    assert client.commands == ["W0"]
-    assert entity.entity_category is EntityCategory.CONFIG
-    assert entity.entity_registry_enabled_default is True
-    assert entity.device_class is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("has_observed_state", [False, True])
-async def test_hub_sync_button_sends_shared_command_without_state_changes(
-    entry: SimpleNamespace,
-    client: FakeClient,
-    has_observed_state: bool,
-) -> None:
-    """The shared hub action preserves unknown or observed state until feedback."""
-    if has_observed_state:
-        client.state.update(
-            {
-                "audio": "Channel 1",
-                "hub1": "Channel 2",
-                "hub2": "Sync",
-                "video1": "Channel 2",
-            }
-        )
-    before = client.state.copy()
-    entity = ConnectProRoutingSyncButton(entry, "sync_usb_hubs")
-
-    await entity.async_press()
-
-    assert client.commands == ["h0p0"]
-    assert client.state == before
-    assert entity.unique_id == "entry-1_sync_usb_hubs"
-    assert entity.translation_key == "sync_usb_hubs"
-    assert entity.entity_category is EntityCategory.CONFIG
-    assert entity.entity_registry_enabled_default is True
-    assert entity.device_class is None
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "expected_type"),
+    ("key", "invalid"),
     [
-        (ConnectionError("disconnected"), HomeAssistantError),
-        (OSError("write failed"), HomeAssistantError),
-        (TimeoutError("write timed out"), HomeAssistantError),
-        (ValueError("invalid command"), ServiceValidationError),
+        ("channel", ["Channel 0", "Channel 5", "channel 1", "Ch1", ""]),
+        ("hotkey", ["ctrl", "CTRL", "Scroll", "Alt", "", "shift\r\n"]),
+        ("auto_scan", ["On", "off", "5", "6 seconds", ""]),
+        ("audio", ["Channel 0"]),
+        ("video1", ["Channel 5"]),
+        ("video2", ["sync"]),
+        ("hub1", ["Ch2"]),
+        ("hub2", [""]),
     ],
 )
-async def test_hub_sync_failure_surfaces_without_changing_state(
-    entry: SimpleNamespace,
-    client: FakeClient,
-    error: Exception,
-    expected_type: type[HomeAssistantError],
-) -> None:
-    """A failed sync action preserves every routing observation."""
-    client.state.update(
-        {
-            "audio": "Channel 1",
-            "hub1": "Channel 2",
-            "hub2": "Sync",
-            "video1": "Channel 2",
-        }
-    )
-    before = client.state.copy()
-    client.send_error = error
+async def test_select_service_rejects_unsupported_options_without_writing(
+    hass, kvm, key, invalid
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", key)
 
-    with pytest.raises(expected_type, match=str(error)) as raised:
-        await ConnectProRoutingSyncButton(entry, "sync_usb_hubs").async_press()
+    for option in invalid:
+        with pytest.raises(ServiceValidationError, match="option"):
+            await call(hass, entity_id, "select_option", option=option)
 
-    assert raised.value.__cause__ is error
-    assert client.state == before
-    assert client.commands == []
+    assert port.writes == [STARTUP_QUERY]
+    assert state(hass, entity_id) == STATE_UNKNOWN
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("initial_state", [None, False, True])
 @pytest.mark.parametrize(
-    ("entity_type", "state_key", "action", "command", "reported_state"),
+    ("key", "feedback", "initial", "intervening", "commands"),
     [
-        (ConnectProBuzzerSwitch, "buzzer", "async_turn_on", "BZON", True),
-        (ConnectProBuzzerSwitch, "buzzer", "async_turn_off", "BZOFF", False),
+        ("channel", b"CH-2", "Channel 2", "Channel 3", [b"Ch3", b"Ch2"]),
+        ("hotkey", b"Hot KEY : CTRL", "Ctrl", "Shift", [b"shift", b"ctrl"]),
         (
-            ConnectProMouseChannelSwitch,
-            "mouse_change_channel",
-            "async_turn_on",
-            "M1",
-            True,
+            "auto_scan",
+            b"Auto Scan : ON\r\nAuto Scan : 1(5sec)",
+            "5 seconds",
+            "8 seconds",
+            [b"s2", b"s1"],
         ),
         (
-            ConnectProMouseChannelSwitch,
-            "mouse_change_channel",
-            "async_turn_off",
-            "M0",
-            False,
+            "video2",
+            b"Video2 : ASYNC-mode-Port2",
+            "Channel 2",
+            "Channel 3",
+            [b"v2p3", b"v2p2"],
         ),
     ],
 )
-async def test_switch_waits_for_feedback_even_when_request_matches_state(
-    entry: SimpleNamespace,
-    client: FakeClient,
-    entity_type: type,
-    state_key: str,
-    initial_state: bool | None,
-    action: str,
-    command: str,
-    reported_state: bool,
-) -> None:
-    """Every request sends its command; only received state changes the switch."""
-    if initial_state is not None:
-        client.state[state_key] = initial_state
-    entity = entity_type(entry)
-    assert entity.is_on is initial_state
+async def test_select_accepts_a_request_matching_stale_feedback(
+    hass, kvm, key, feedback, initial, intervening, commands
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", key)
+    await port.reader.receive(feedback + b"\r\n")
 
-    await getattr(entity, action)()
+    await call(hass, entity_id, "select_option", option=intervening)
+    await call(hass, entity_id, "select_option", option=initial)
 
-    assert client.commands == [command]
-    assert entity.is_on is initial_state
-    client.state[state_key] = reported_state
-    assert entity.is_on is reported_state
+    assert port.writes == [STARTUP_QUERY, *(command + b"\r\n" for command in commands)]
+    assert state(hass, entity_id) == initial
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("entity_type", "state_key"),
-    [
-        (ConnectProBuzzerSwitch, "buzzer"),
-        (ConnectProMouseChannelSwitch, "mouse_change_channel"),
-    ],
-)
-@pytest.mark.parametrize("action", ["async_turn_on", "async_turn_off"])
-@pytest.mark.parametrize(
-    ("error", "expected_type"),
-    [
-        (ConnectionError("disconnected"), HomeAssistantError),
-        (OSError("write failed"), HomeAssistantError),
-        (TimeoutError("write timed out"), HomeAssistantError),
-        (ValueError("invalid command"), ServiceValidationError),
-    ],
-)
-async def test_switch_surfaces_command_failures_without_changing_state(
-    entry: SimpleNamespace,
-    client: FakeClient,
-    entity_type: type,
-    state_key: str,
-    action: str,
-    error: Exception,
-    expected_type: type[HomeAssistantError],
-) -> None:
-    """A failed switch request preserves observed state and reaches the caller."""
-    client.state[state_key] = False
-    client.send_error = error
-    entity = entity_type(entry)
-
-    with pytest.raises(expected_type, match=str(error)) as raised:
-        await getattr(entity, action)()
-
-    assert raised.value.__cause__ is error
-    assert entity.is_on is False
-    assert client.commands == []
-
-
-@pytest.mark.parametrize(
-    ("entity_type", "key"),
-    [
-        (ConnectProAutoScanSelect, "auto_scan"),
-        (ConnectProHotkeySelect, "hotkey"),
-        (ConnectProBuzzerSwitch, "buzzer"),
-        (ConnectProMouseChannelSwitch, "mouse_change_channel"),
-    ],
-)
-def test_setting_controls_are_enabled_configuration_entities(
-    entry: SimpleNamespace, entity_type: type, key: str
-) -> None:
-    """Controls belong to the shared device and expose configuration settings."""
-    control = entity_type(entry)
-
-    assert control.unique_id == f"entry-1_{key}"
-    assert control.translation_key == key
-    assert control.entity_category is EntityCategory.CONFIG
-    assert control.entity_registry_enabled_default is True
-
-
-@pytest.mark.asyncio
-async def test_mouse_switch_change_back_before_feedback_is_not_dropped(
-    entry: SimpleNamespace, client: FakeClient
-) -> None:
-    """Turning off again must follow the pending on request, despite stale off state."""
-    client.state["mouse_change_channel"] = False
-    entity = ConnectProMouseChannelSwitch(entry)
-
-    await entity.async_turn_on()
-    await entity.async_turn_off()
-
-    assert client.commands == ["M1", "M0"]
-    assert entity.is_on is False
-
-
-@pytest.mark.parametrize("key", ["audio", "video1", "video2", "hub1", "hub2"])
-def test_routing_selectors_report_only_known_destinations(
-    entry: SimpleNamespace, client: FakeClient, key: str
-) -> None:
-    """Each route exposes observed Sync/channel state with no default guess."""
-    entity = ConnectProRoutingSelect(entry, key)
-    options = ["Sync", "Channel 1", "Channel 2", "Channel 3", "Channel 4"]
-    assert entity.options == options
-    assert entity.current_option is None
-    assert entity.entity_category is EntityCategory.CONFIG
-    assert entity.entity_registry_enabled_default is True
-    for value in options:
-        client.state[key] = value
-        assert entity.current_option == value
-        assert entity.state == value
-    for value in (False, "Channel 5", "sync"):
-        client.state[key] = value
-        assert entity.current_option is None
-    assert client.commands == []
-
-
-@pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "prefix", "reply", "sync"), ROUTES)
 @pytest.mark.parametrize("channel", range(1, 5))
-@pytest.mark.parametrize(
-    ("key", "prefix"),
-    [
-        ("audio", "o"),
-        ("video1", "v1p"),
-        ("video2", "v2p"),
-        ("hub1", "h1p"),
-        ("hub2", "h2p"),
-    ],
-)
-async def test_routing_channel_requests_use_exact_route_commands_and_wait_for_feedback(
-    entry: SimpleNamespace, client: FakeClient, key: str, prefix: str, channel: int
-) -> None:
-    """All five routes map channels 1-4 without optimistic updates or extra writes."""
-    client.state[key] = "Sync"
-    entity = ConnectProRoutingSelect(entry, key)
+async def test_routing_select_waits_for_feedback(
+    hass, kvm, key, prefix, reply, sync, channel
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", key)
+    assert hass.states.get(entity_id).attributes["options"] == ["Sync", *CHANNELS]
+    assert state(hass, entity_id) == STATE_UNKNOWN
+    await port.reader.receive(reply.format(5).encode() + b"\r\n")
+    assert state(hass, entity_id) == STATE_UNKNOWN
+    await port.reader.receive(sync.encode() + b"\r\n")
 
-    await entity.async_select_option(f"Channel {channel}")
+    await call(hass, entity_id, "select_option", option=f"Channel {channel}")
 
-    assert client.commands == [f"{prefix}{channel}"]
-    assert entity.current_option == "Sync"
-    client.state[key] = f"Channel {channel}"
-    assert entity.current_option == f"Channel {channel}"
+    assert port.writes == [STARTUP_QUERY, f"{prefix}{channel}\r\n".encode()]
+    assert state(hass, entity_id) == "Sync"
+    await port.reader.receive(reply.format(channel).encode() + b"\r\n")
+    assert state(hass, entity_id) == f"Channel {channel}"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("key", "command"), [("audio", "o0"), ("video1", "v1p0"), ("video2", "v2p0")]
-)
-async def test_audio_and_video_sync_requests_wait_for_observed_state(
-    entry: SimpleNamespace, client: FakeClient, key: str, command: str
-) -> None:
-    """Only audio and video selectors can request independent Sync."""
-    client.state[key] = "Channel 2"
-    entity = ConnectProRoutingSelect(entry, key)
+@pytest.mark.parametrize(("key", "prefix", "reply", "sync"), ROUTES[:3])
+async def test_audio_and_video_can_request_independent_sync(
+    hass, kvm, key, prefix, reply, sync
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", key)
+    await port.reader.receive(reply.format(2).encode() + b"\r\n")
 
-    await entity.async_select_option("Sync")
+    await call(hass, entity_id, "select_option", option="Sync")
 
-    assert client.commands == [command]
-    assert entity.current_option == "Channel 2"
-    client.state[key] = "Sync"
-    assert entity.current_option == "Sync"
+    assert port.writes == [STARTUP_QUERY, f"{prefix}0\r\n".encode()]
+    assert state(hass, entity_id) == "Channel 2"
+    await port.reader.receive(sync.encode() + b"\r\n")
+    assert state(hass, entity_id) == "Sync"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("key", ["hub1", "hub2"])
+@pytest.mark.parametrize(("key", "prefix", "reply", "sync"), ROUTES[3:])
 @pytest.mark.parametrize("observed", ["Sync", "Channel 2"])
-async def test_hub_sync_selection_is_rejected_before_any_command(
-    entry: SimpleNamespace, client: FakeClient, key: str, observed: str
-) -> None:
-    """HA can display Sync while the backend protects both independent hub routes."""
-    client.state[key] = observed
-    entity = ConnectProRoutingSelect(entry, key)
-    assert "Sync" in entity.options
+async def test_hub_can_report_sync_but_rejects_request_for_independent_sync(
+    hass, kvm, key, prefix, reply, sync, observed
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", key)
+    feedback = sync if observed == "Sync" else reply.format(2)
+    await port.reader.receive(feedback.encode() + b"\r\n")
 
-    with pytest.raises(ServiceValidationError) as raised:
-        await entity.async_handle_select_option("Sync")
+    with pytest.raises(ServiceValidationError, match="Sync both USB hubs"):
+        await call(hass, entity_id, "select_option", option="Sync")
 
-    assert str(raised.value) == (
-        "Hub routing cannot be synchronized independently. "
-        "Use Sync both USB hubs to synchronize both hubs."
-    )
-    assert client.commands == []
-    assert entity.current_option == observed
-    assert client.state == {key: observed}
+    assert port.writes == [STARTUP_QUERY]
+    assert state(hass, entity_id) == observed
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("key", "option"),
-    [
-        ("audio", "Channel 0"),
-        ("video1", "Channel 5"),
-        ("video2", "sync"),
-        ("hub1", "Ch2"),
-        ("hub2", ""),
-    ],
-)
-async def test_routing_rejects_invalid_options(
-    entry: SimpleNamespace, client: FakeClient, key: str, option: str
-) -> None:
-    """Invalid options never become arbitrary or guessed serial commands."""
-    with pytest.raises(ServiceValidationError, match="Unsupported ConnectPro routing"):
-        await ConnectProRoutingSelect(entry, key).async_select_option(option)
-    assert client.commands == []
+@pytest.mark.parametrize("observed", [False, True])
+async def test_shared_sync_writes_once_and_only_feedback_changes_hubs(
+    hass, kvm, observed
+):
+    entry, port = kvm
+    hub1 = find_entity(hass, entry, "select", "hub1")
+    hub2 = find_entity(hass, entry, "select", "hub2")
+    audio = find_entity(hass, entry, "select", "audio")
+    if observed:
+        await port.reader.receive(
+            b"HUB1 : Async-> Channel 2\r\nHUB2 : Async-> Channel 3\r\nAUDIO : CHANNEL1\r\n"
+        )
+    previous = [state(hass, entity_id) for entity_id in (hub1, hub2, audio)]
+
+    await call(hass, find_entity(hass, entry, "button", "sync_usb_hubs"), "press")
+
+    assert port.writes == [STARTUP_QUERY, b"h0p0\r\n"]
+    assert [state(hass, entity_id) for entity_id in (hub1, hub2, audio)] == previous
+    await port.reader.receive(b"HUB1 : Sync\r\nHUB2 : Sync\r\n")
+    assert [state(hass, entity_id) for entity_id in (hub1, hub2, audio)] == [
+        "Sync",
+        "Sync",
+        previous[2],
+    ]
 
 
-@pytest.mark.asyncio
-async def test_routing_change_back_before_feedback_is_not_dropped(
-    entry: SimpleNamespace, client: FakeClient
-) -> None:
-    """Matching stale routing feedback still sends the user's latest request."""
-    client.state["video2"] = "Channel 2"
-    entity = ConnectProRoutingSelect(entry, "video2")
+async def test_reset_writes_w0_without_changing_channel(hass, kvm):
+    entry, port = kvm
+    channel = find_entity(hass, entry, "select", "channel")
+    await port.reader.receive(b"CH-2\r\n")
 
-    await entity.async_select_option("Channel 3")
-    await entity.async_select_option("Channel 2")
+    await call(hass, find_entity(hass, entry, "button", "reset"), "press")
 
-    assert client.commands == ["v2p3", "v2p2"]
-    assert entity.current_option == "Channel 2"
+    assert port.writes == [STARTUP_QUERY, b"W0\r\n"]
+    await port.reader.receive(b"Wake-Up : DP-ALL\r\n")
+    assert state(hass, channel) == "Channel 2"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("key", "error", "expected_type"),
-    [
-        ("audio", ConnectionError("disconnected"), HomeAssistantError),
-        ("video1", OSError("write failed"), HomeAssistantError),
-        ("video2", TimeoutError("write timed out"), HomeAssistantError),
-        ("hub1", ValueError("invalid command"), ServiceValidationError),
-        ("hub2", OSError("write failed"), HomeAssistantError),
-    ],
-)
-async def test_routing_errors_preserve_observed_state(
-    entry: SimpleNamespace,
-    client: FakeClient,
-    key: str,
-    error: Exception,
-    expected_type: type[HomeAssistantError],
-) -> None:
-    """All routes surface transport errors without fabricating successful state."""
-    client.state[key] = "Sync"
-    client.send_error = error
-    entity = ConnectProRoutingSelect(entry, key)
-
-    with pytest.raises(expected_type, match=str(error)) as raised:
-        await entity.async_select_option("Channel 2")
-
-    assert raised.value.__cause__ is error
-    assert entity.current_option == "Sync"
-    assert client.commands == []
-
-
-@pytest.mark.asyncio
-async def test_platforms_share_device_identity_and_connection_availability(
-    hass: HomeAssistant, entry: SimpleNamespace, client: FakeClient
-) -> None:
-    """Every platform adds the expected entities for one KVM device."""
-    platforms = {
-        Platform.SELECT: select,
-        Platform.BUTTON: button,
-        Platform.SWITCH: switch,
-    }
-    assert set(PLATFORMS) == set(platforms)
-    entities_by_platform = {}
-    for domain, platform in platforms.items():
-        entities_by_platform[domain] = []
-        await platform.async_setup_entry(
-            hass, entry, entities_by_platform[domain].extend
+@pytest.mark.parametrize(("key", "on", "off", "report_on", "report_off"), SWITCHES)
+@pytest.mark.parametrize("initial", [STATE_UNKNOWN, STATE_OFF, STATE_ON])
+@pytest.mark.parametrize("requested", [STATE_OFF, STATE_ON])
+async def test_switch_waits_for_feedback(
+    hass, kvm, key, on, off, report_on, report_off, initial, requested
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "switch", key)
+    if initial != STATE_UNKNOWN:
+        await port.reader.receive(
+            (report_on if initial == STATE_ON else report_off) + b"\r\n"
         )
 
-    expected_keys = {
-        Platform.SELECT: {
+    await call(hass, entity_id, f"turn_{requested}")
+
+    assert port.writes == [
+        STARTUP_QUERY,
+        (on if requested == STATE_ON else off) + b"\r\n",
+    ]
+    assert state(hass, entity_id) == initial
+    await port.reader.receive(
+        (report_on if requested == STATE_ON else report_off) + b"\r\n"
+    )
+    assert state(hass, entity_id) == requested
+
+
+async def test_mouse_switch_accepts_off_before_pending_on_is_confirmed(hass, kvm):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "switch", "mouse_change_channel")
+    await port.reader.receive(b"Mouse change channel : OFF\r\n")
+
+    await call(hass, entity_id, "turn_on")
+    await call(hass, entity_id, "turn_off")
+
+    assert port.writes == [STARTUP_QUERY, b"M1\r\n", b"M0\r\n"]
+    assert state(hass, entity_id) == STATE_OFF
+
+
+@pytest.mark.parametrize(
+    ("domain", "key", "action", "data"),
+    [
+        ("select", "channel", "select_option", {"option": "Channel 3"}),
+        ("select", "hotkey", "select_option", {"option": "Shift"}),
+        ("select", "auto_scan", "select_option", {"option": "8 seconds"}),
+        ("select", "audio", "select_option", {"option": "Channel 3"}),
+        ("select", "video1", "select_option", {"option": "Channel 3"}),
+        ("select", "video2", "select_option", {"option": "Channel 3"}),
+        ("select", "hub1", "select_option", {"option": "Channel 3"}),
+        ("select", "hub2", "select_option", {"option": "Channel 3"}),
+        ("switch", "buzzer", "turn_on", {}),
+        ("switch", "mouse_change_channel", "turn_off", {}),
+        ("button", "sync_usb_hubs", "press", {}),
+    ],
+)
+@pytest.mark.parametrize(
+    "error", [OSError("write failed"), TimeoutError("write timed out")]
+)
+async def test_transport_failure_reaches_the_service_caller_and_marks_entities_unavailable(
+    hass, kvm, domain, key, action, data, error
+):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, domain, key)
+    channel = find_entity(hass, entry, "select", "channel")
+    await port.reader.receive(b"CH-1\r\n")
+    port.drain_error = error
+
+    with pytest.raises(HomeAssistantError, match=str(error)):
+        await call(hass, entity_id, action, **data)
+
+    assert port.closed
+    assert state(hass, channel) == STATE_UNAVAILABLE
+    assert state(hass, entity_id) == STATE_UNAVAILABLE
+
+
+async def test_platforms_register_a_single_device_and_expected_controls(hass, kvm):
+    entry, _ = kvm
+    registry = er.async_get(hass)
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device is not None
+    assert device.name == "Desk KVM"
+    assert device.manufacturer == "ConnectPro"
+    assert device.model is None
+    expected = {
+        "select": {
             "channel",
             "hotkey",
             "auto_scan",
@@ -719,129 +407,60 @@ async def test_platforms_share_device_identity_and_connection_availability(
             "hub1",
             "hub2",
         },
-        Platform.BUTTON: {"reset", "sync_usb_hubs"},
-        Platform.SWITCH: {"buzzer", "mouse_change_channel"},
+        "button": {"reset", "sync_usb_hubs"},
+        "switch": {"buzzer", "mouse_change_channel"},
     }
-    identities = []
-    for domain, platform_entities in entities_by_platform.items():
-        assert len(platform_entities) == len(expected_keys[domain])
-        assert {
-            entity.translation_key for entity in platform_entities
-        } == expected_keys[domain]
-        assert {entity.unique_id for entity in platform_entities} == {
-            f"entry-1_{key}" for key in expected_keys[domain]
-        }
-        identities.extend((domain, entity.unique_id) for entity in platform_entities)
-    assert len(set(identities)) == len(identities)
-    entities = [
-        entity
-        for platform_entities in entities_by_platform.values()
-        for entity in platform_entities
-    ]
-    assert len(entities) == 12
-    for entity in entities:
-        assert entity.has_entity_name is True
-        assert entity.should_poll is False
-        assert entity.available is True
-        assert entity.device_info == {
-            "identifiers": {(DOMAIN, "entry-1")},
-            "manufacturer": "ConnectPro",
-            "name": "Desktop KVM",
-        }
 
-    client.connected = False
-    assert all(not entity.available for entity in entities)
-    client.connected = True
-    assert all(entity.available for entity in entities)
+    controls = er.async_entries_for_config_entry(registry, entry.entry_id)
+    assert {(control.domain, control.translation_key) for control in controls} == {
+        (domain, key) for domain, keys in expected.items() for key in keys
+    }
+    for control in controls:
+        assert control.unique_id == f"{entry.entry_id}_{control.translation_key}"
+        assert control.device_id == device.id
+        assert not control.disabled
+        assert state(hass, control.entity_id) != STATE_UNAVAILABLE
+        if control.translation_key != "channel":
+            assert control.entity_category is EntityCategory.CONFIG
 
 
-def test_device_name_falls_back_when_entry_title_is_empty(
-    entry: SimpleNamespace,
-) -> None:
-    """An untitled entry still has a usable device name."""
-    entry.title = ""
-    assert ConnectProChannelSelect(entry).device_info["name"] == "ConnectPro KVM"
+async def test_state_events_follow_feedback_and_unload(hass, kvm, serial_ports):
+    entry, port = kvm
+    entity_id = find_entity(hass, entry, "select", "channel")
+    states = []
+
+    @callback
+    def record(event):
+        if event.data["entity_id"] == entity_id:
+            next_state = event.data["new_state"]
+            states.append(next_state.state if next_state is not None else None)
+
+    unsubscribe = hass.bus.async_listen(EVENT_STATE_CHANGED, record)
+    try:
+        await call(hass, entity_id, "select_option", option="Channel 3")
+        await hass.async_block_till_done()
+        assert states == []
+        await port.reader.receive(b"CH-3\r\n")
+        await hass.async_block_till_done()
+        assert states == ["Channel 3"]
+
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+        assert port.closed
+        assert state(hass, entity_id) == STATE_UNAVAILABLE
+
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        new_port = serial_ports.sessions["test-kvm"][-1]
+        assert state(hass, entity_id) == STATE_UNKNOWN
+        await new_port.reader.receive(b"CH-4\r\n")
+        await hass.async_block_till_done()
+        assert states[-1] == "Channel 4"
+    finally:
+        unsubscribe()
 
 
-@pytest.mark.parametrize("model", [None, "", False, "UDP2-14AP"])
-def test_device_info_includes_only_reported_model_metadata(
-    entry: SimpleNamespace, client: FakeClient, model: str | bool | None
-) -> None:
-    """Entities created after detection include the model without a default guess."""
-    if model is not None:
-        client.state["model"] = model
-    device_info = ConnectProChannelSelect(entry).device_info
-    if model == "UDP2-14AP":
-        assert device_info["model"] == "UDP2-14AP"
-    else:
-        assert "model" not in device_info
-
-
-def test_delayed_model_is_included_without_entity_subscription(
-    entry: SimpleNamespace, client: FakeClient
-) -> None:
-    """DeviceInfo follows reported metadata even before an entity is registered."""
-    entity = ConnectProChannelSelect(entry)
-    assert "model" not in entity.device_info
-    client.state["model"] = "UDP2-14AP"
-    assert entity.device_info["model"] == "UDP2-14AP"
-    client.state.clear()
-    assert "model" not in entity.device_info
-    assert client.listeners == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("entity_factory", "entity_id"),
-    [
-        (ConnectProChannelSelect, "select.connectpro_channel"),
-        (ConnectProHotkeySelect, "select.connectpro_hotkey"),
-        (ConnectProAutoScanSelect, "select.connectpro_auto_scan"),
-        (ConnectProBuzzerSwitch, "switch.connectpro_buzzer"),
-        (ConnectProMouseChannelSwitch, "switch.connectpro_mouse_channel_switching"),
-        (
-            lambda entry: ConnectProRoutingSelect(entry, "video1"),
-            "select.connectpro_video1_routing",
-        ),
-    ],
-)
-async def test_entity_listener_updates_state_and_unsubscribes_on_removal(
-    hass: HomeAssistant,
-    entry: SimpleNamespace,
-    client: FakeClient,
-    entity_factory: Callable[[SimpleNamespace], ConnectProEntity],
-    entity_id: str,
-) -> None:
-    """Serial updates publish state only while the entity is registered."""
-    entity = entity_factory(entry)
-    entity.hass = hass
-    entity.entity_id = entity_id
-    assert client.listeners == []
-
-    with patch.object(entity, "async_write_ha_state", new=Mock()) as write_state:
-        await entity.async_added_to_hass()
-        assert len(client.listeners) == 1
-
-        client.state.update(
-            {
-                "channel": "Channel 3",
-                "hotkey": "Shift",
-                "auto_scan": True,
-                "auto_scan_interval": "8 seconds",
-                "buzzer": True,
-                "mouse_change_channel": True,
-                "video1": "Channel 2",
-            }
-        )
-        client.notify()
-        write_state.assert_called_once_with()
-
-        client.connected = False
-        client.notify()
-        assert not entity.available
-        assert write_state.call_count == 2
-
-        await entity.async_remove(force_remove=True)
-        assert client.listeners == []
-        client.notify()
-        assert write_state.call_count == 2
+async def test_device_uses_default_name_when_entry_title_is_empty(hass, add_entry):
+    entry = await add_entry(title="")
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device is not None
+    assert device.name == "ConnectPro KVM"

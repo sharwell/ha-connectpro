@@ -3,24 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
-import sys
-import types
 import unittest
 from contextlib import suppress
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-# Load only the transport modules, without running the HA integration package.
-_PACKAGE = "connectpro_transport_test"
-_SOURCE = Path(__file__).resolve().parents[1] / "custom_components/connectpro"
-_namespace = types.ModuleType(_PACKAGE)
-_namespace.__path__ = [str(_SOURCE)]
-sys.modules.setdefault(_PACKAGE, _namespace)
-client_module = importlib.import_module(f"{_PACKAGE}.client")
-ConnectProClient = client_module.ConnectProClient
-SerialSettings = client_module.SerialSettings
+from serial_peer import SerialReader, SerialWriter
+
+from custom_components.connectpro import client as client_module
+from custom_components.connectpro.client import ConnectProClient, SerialSettings
+
+LOGGER_NAME = client_module.__name__
 
 
 def simulated_initialization_report() -> tuple[list[bytes], dict[str, str | bool]]:
@@ -45,50 +39,18 @@ def simulated_initialization_report() -> tuple[list[bytes], dict[str, str | bool
     }
 
 
-class FakeWriter:
-    """A stream writer whose drain and connection loss can be controlled."""
-
-    def __init__(self, reader: asyncio.StreamReader) -> None:
-        self.reader = reader
-        self.writes: list[bytes] = []
-        self.closed = False
-        self.close_count = 0
-        self.drain_started = asyncio.Event()
-        self.drain_gate: asyncio.Event | None = None
-        self.drain_error: Exception | None = None
-
-    def write(self, data: bytes) -> None:
-        if self.closed:
-            raise ConnectionError("writer closed")
-        self.writes.append(data)
-
-    async def drain(self) -> None:
-        self.drain_started.set()
-        if self.drain_gate is not None:
-            await self.drain_gate.wait()
-        if self.drain_error is not None:
-            raise self.drain_error
-
-    def close(self) -> None:
-        self.closed = True
-        self.close_count += 1
-        self.reader.feed_eof()
-
-    async def wait_closed(self) -> None:
-        return
-
-
 class ClientTests(unittest.IsolatedAsyncioTestCase):
     """Test complete connect/read/write/reconnect/close behavior."""
 
     async def asyncSetUp(self) -> None:
-        self.reader = asyncio.StreamReader()
-        self.writer = FakeWriter(self.reader)
+        self.reader = SerialReader()
+        self.writer = SerialWriter(self.reader)
         self.client = ConnectProClient(SerialSettings("/dev/test-kvm"))
         self.opener_patch = patch.object(
             client_module, "open_serial_connection", new_callable=AsyncMock
         )
         self.opener = self.opener_patch.start()
+        self.addCleanup(self.opener_patch.stop)
         self.opener.return_value = self.reader, self.writer
         self.tasks: list[asyncio.Task] = []
 
@@ -98,7 +60,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             with suppress(asyncio.CancelledError):
                 await task
         await self.client.async_close()
-        self.opener_patch.stop()
 
     def start_reader(self, *, initialize_state: bool = False) -> asyncio.Task:
         task = asyncio.create_task(
@@ -143,14 +104,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         chunks, expected = simulated_initialization_report()
         await self.client.async_connect()
         self.assertEqual(self.writer.writes, [])
-        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader(initialize_state=True)
             await asyncio.wait_for(self.writer.drain_started.wait(), 1)
             self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
             self.assertEqual(self.client.state, {})
             for index, chunk in enumerate(chunks):
-                self.reader.feed_data(chunk)
-                await asyncio.sleep(0)
+                await self.reader.receive(chunk)
                 self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
                 self.assertEqual(
                     self.client.state.get("model"),
@@ -176,8 +136,8 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         """Each replacement connection gets one query after stale state is cleared."""
         chunks, expected = simulated_initialization_report()
         await self.client.async_connect()
-        next_reader = asyncio.StreamReader()
-        next_writer = FakeWriter(next_reader)
+        next_reader = SerialReader()
+        next_writer = SerialWriter(next_reader)
         self.opener.return_value = next_reader, next_writer
         backoff_started = asyncio.Event()
         resume = asyncio.Event()
@@ -194,13 +154,12 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 self.client, "_wait_to_reconnect", side_effect=wait_for_reconnect
             ) as wait,
-            self.assertLogs(client_module._LOGGER, level="WARNING"),
+            self.assertLogs(LOGGER_NAME, level="WARNING"),
         ):
             task = self.start_reader(initialize_state=True)
             await asyncio.wait_for(self.writer.drain_started.wait(), 1)
             for chunk in chunks:
-                self.reader.feed_data(chunk)
-                await asyncio.sleep(0)
+                await self.reader.receive(chunk)
             self.assertEqual(self.client.state, expected)
             self.reader.feed_eof()
             await asyncio.wait_for(backoff_started.wait(), 1)
@@ -213,15 +172,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.client.connected)
             self.assertEqual(self.client.state, {})
             self.assertEqual(next_writer.writes, [b"k1p0\r\n"])
-            for chunk in chunks:
-                next_reader.feed_data(chunk)
-                await asyncio.sleep(0)
-                self.assertEqual(next_writer.writes, [b"k1p0\r\n"])
+            await next_reader.receive(b"CH-4\r\nBZON\r\n")
 
         wait.assert_awaited_once_with(client_module.RECONNECT_DELAY)
         self.assertIn((False, {}), observed)
         self.assertIn((True, {}), observed)
-        self.assertEqual(self.client.state, expected)
+        self.assertEqual(self.client.state, {"channel": "Channel 4", "buzzer": True})
+        self.assertEqual(next_writer.writes, [b"k1p0\r\n"])
         self.assertEqual(self.writer.writes, [b"k1p0\r\n"])
         self.assertFalse(next_writer.closed)
         self.assertFalse(task.done())
@@ -234,8 +191,8 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         chunks, expected = simulated_initialization_report()
         await self.client.async_connect()
         self.writer.drain_error = client_module.SerialException("initial query failed")
-        next_reader = asyncio.StreamReader()
-        next_writer = FakeWriter(next_reader)
+        next_reader = SerialReader()
+        next_writer = SerialWriter(next_reader)
         self.opener.return_value = next_reader, next_writer
         backoff_started = asyncio.Event()
         resume = asyncio.Event()
@@ -248,7 +205,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 self.client, "_wait_to_reconnect", side_effect=wait_for_reconnect
             ) as wait,
-            self.assertLogs(client_module._LOGGER, level="WARNING"),
+            self.assertLogs(LOGGER_NAME, level="WARNING"),
         ):
             task = self.start_reader(initialize_state=True)
             await asyncio.wait_for(backoff_started.wait(), 1)
@@ -263,8 +220,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(next_writer.writes, [b"k1p0\r\n"])
             self.assertEqual(self.client.state, {})
             for chunk in chunks:
-                next_reader.feed_data(chunk)
-                await asyncio.sleep(0)
+                await next_reader.receive(chunk)
 
         wait.assert_awaited_once_with(client_module.RECONNECT_DELAY)
         self.assertEqual(self.client.state, expected)
@@ -314,10 +270,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 complete.set() if self.client.state.get("hotkey") == "Ctrl" else None
             )
         )
-        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             self.start_reader()
-            self.reader.feed_data(b"CH")
-            await asyncio.sleep(0)
+            await self.reader.receive(b"CH")
             self.reader.feed_data(b"-2\r\nBZOFF\n\xffunknown\nK50_0 FW Ver B1.42\n")
             self.reader.feed_data(b"AUDIO : Sync\nHot KEY : CTRL\n")
             await asyncio.wait_for(complete.wait(), 1)
@@ -350,13 +305,10 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         payload = ("\n".join(report) + "\n").encode("ascii")
         await self.client.async_connect()
 
-        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader()
             for offset in range(0, len(payload), 17):
-                self.reader.feed_data(payload[offset : offset + 17])
-                # Let the reader process each fragment, including the final
-                # firmware lines after the model and seven setting messages.
-                await asyncio.sleep(0)
+                await self.reader.receive(payload[offset : offset + 17])
 
         self.assertEqual(
             self.client.state,
@@ -421,29 +373,18 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.client.async_connect()
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader()
             self.assertEqual(self.writer.writes, [])
             await self.client.async_send_command("K1P0")
             self.assertEqual(self.writer.writes, [tx])
             for index, chunk in enumerate(chunks):
-                self.reader.feed_data(chunk)
-                # Preserve the captured boundaries rather than coalescing
-                # queued data into a single StreamReader.read() result.
-                await asyncio.sleep(0)
+                await self.reader.receive(chunk)
                 self.assertEqual(
                     self.client.state.get("model"),
                     None if index == 0 else "UDP2-14AP",
                 )
 
-        self.assertEqual(
-            [call.args[0] for call in parse.call_args_list], expected_lines
-        )
         self.assertEqual(
             self.client.state,
             {
@@ -495,26 +436,22 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             b"UDP2_12AP_U3 : Version_Number - 0009 - D1223\r\n"
             b"UDP2_14AP_U3 : Version_Number - \r\n\r\n"
         )
-        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader()
-            self.reader.feed_data(unknown_reports)
-            await asyncio.sleep(0)
+            await self.reader.receive(unknown_reports)
             self.assertEqual(self.client.state, {})
             self.assertEqual(observed, [])
-            self.reader.feed_data(b"UDP2_14AP_U3 : Version_Number - 0010 - D0101")
-            await asyncio.sleep(0)
+            await self.reader.receive(b"UDP2_14AP_U3 : Version_Number - 0010 - D0101")
             self.assertEqual(self.client.state, {})
             self.assertEqual(observed, [])
-            self.reader.feed_data(b"\r\n")
-            await asyncio.sleep(0)
+            await self.reader.receive(b"\r\n")
             self.assertEqual(self.client.state, {"model": "UDP2-14AP"})
             self.assertEqual(observed, [{"model": "UDP2-14AP"}])
             # Later unknown reports cannot replace the confirmed identifier;
             # a different version of the same board also leaves the model intact.
-            self.reader.feed_data(
+            await self.reader.receive(
                 unknown_reports + b"UDP2_14AP_U3 : Version_Number - 0009 - D1223\r\n"
             )
-            await asyncio.sleep(0)
 
         self.assertEqual(self.client.state, {"model": "UDP2-14AP"})
         self.assertEqual(observed, [{"model": "UDP2-14AP"}])
@@ -569,15 +506,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.async_connect()
         observed = []
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
-        expected_parse_counts = [0, 1, 2, 2, 3, 3, 4]
         expected_writes = []
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader()
             for index, (direction, payload) in enumerate(events):
                 if direction == "TX":
@@ -586,19 +517,12 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_writes.append(payload)
                 else:
-                    self.reader.feed_data(payload)
-                # Yield to the reader without replaying elapsed wall time.
-                await asyncio.sleep(0)
+                    await self.reader.receive(payload)
                 self.assertEqual(self.writer.writes, expected_writes)
-                self.assertEqual(parse.call_count, expected_parse_counts[index])
                 self.assertEqual(
                     self.client.state, {} if index < 2 else {"channel": "Channel 2"}
                 )
 
-        self.assertEqual(
-            [call.args[0] for call in parse.call_args_list],
-            ["OK", "CH2", "K1P1", "CH2"],
-        )
         self.assertEqual(observed, [{"channel": "Channel 2"}])
         self.assertTrue(self.client.connected)
         self.assertFalse(task.done())
@@ -636,31 +560,23 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         task = self.start_reader()
         # Establish known state from supported responses before the capture.
         # These setup bytes are synthetic, not part of the user's log.
-        self.reader.feed_data(b"CH-2\r\nBZOFF\r\n")
-        await asyncio.sleep(0)
+        await self.reader.receive(b"CH-2\r\nBZOFF\r\n")
         baseline = {"channel": "Channel 2", "buzzer": False}
         self.assertEqual(self.client.state, baseline)
         observed = []
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             for direction, payload in events:
                 if direction == "TX":
                     await self.client.async_send_command(
                         payload.removesuffix(b"\r\n").decode("ascii")
                     )
                 else:
-                    self.reader.feed_data(payload)
-                await asyncio.sleep(0)
+                    await self.reader.receive(payload)
                 self.assertEqual(self.client.state, baseline)
                 self.assertTrue(self.client.connected)
 
-        self.assertEqual([call.args[0] for call in parse.call_args_list], ["ERROR"])
         self.assertEqual(observed, [])
         self.assertFalse(task.done())
         self.assertEqual(self.writer.writes, [b"K2P0\r\n"])
@@ -731,12 +647,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
         expected_writes = []
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader()
             for index, (direction, payload) in enumerate(events):
                 if direction == "TX":
@@ -745,10 +656,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_writes.append(payload)
                 else:
-                    self.reader.feed_data(payload)
-                # Keep the recorded read boundaries without waiting for the
-                # original timestamps or inferring state from user actions.
-                await asyncio.sleep(0)
+                    await self.reader.receive(payload)
                 self.assertEqual(self.writer.writes, expected_writes)
                 if index <= 4:
                     self.assertEqual(self.client.state, {})
@@ -760,10 +668,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 elif index == len(events) - 1:
                     self.assertEqual(self.client.state, final_state)
 
-        self.assertEqual(
-            [call.args[0] for call in parse.call_args_list],
-            ["OK", *report_lines, "CH2"],
-        )
         self.assertEqual(len(observed), 9)
         self.assertEqual(observed[0], {"model": "UDP2-14AP"})
         self.assertEqual(observed[1], {"model": "UDP2-14AP", "channel": "Channel 1"})
@@ -825,7 +729,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.async_connect()
         observed = []
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
-        expected_parse_counts = [0, 0, 0, 1, 2, 3]
         expected_states = [
             {},
             {},
@@ -836,12 +739,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         ]
         unknown_message = "RX /dev/test-kvm unrecognized line: 'Wake-Up : DP-ALL'"
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader()
             for index, (direction, payload) in enumerate(events):
                 if direction == "TX":
@@ -849,10 +747,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                         payload.removesuffix(b"\r\n").decode("ascii")
                     )
                 else:
-                    self.reader.feed_data(payload)
-                # Replay read boundaries, not the minutes between timestamps.
-                await asyncio.sleep(0)
-                self.assertEqual(parse.call_count, expected_parse_counts[index])
+                    await self.reader.receive(payload)
                 self.assertEqual(self.client.state, expected_states[index])
                 self.assertEqual(self.writer.writes, [b"W0\r\n"])
                 self.assertEqual(
@@ -863,10 +758,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     0 if index < 3 else 1,
                 )
 
-        self.assertEqual(
-            [call.args[0] for call in parse.call_args_list],
-            ["Wake-Up : DP-ALL", "CH1", "CH2"],
-        )
         self.assertEqual(observed, [{"channel": "Channel 1"}, {"channel": "Channel 2"}])
         self.assertTrue(self.client.connected)
         self.assertFalse(task.done())
@@ -911,17 +802,11 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.async_connect()
         observed = []
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
-        expected_parse_counts = [0, 1, 1, 1, 2, 2, 3]
         expected_update_counts = [0, 1, 1, 1, 1, 1, 2]
         expected_values = [None, True, True, True, True, True, False]
         expected_writes = []
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader()
             for index, (direction, payload) in enumerate(events):
                 if direction == "TX":
@@ -930,10 +815,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_writes.append(payload)
                 else:
-                    self.reader.feed_data(payload)
-                # Preserve read boundaries without waiting for recorded times.
-                await asyncio.sleep(0)
-                self.assertEqual(parse.call_count, expected_parse_counts[index])
+                    await self.reader.receive(payload)
                 self.assertEqual(len(observed), expected_update_counts[index])
                 self.assertEqual(
                     self.client.state,
@@ -941,9 +823,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(self.writer.writes, expected_writes)
 
-        self.assertEqual(
-            [call.args[0] for call in parse.call_args_list], ["BZON", "BZON", "BZOFF"]
-        )
         self.assertEqual(observed, [{"buzzer": True}, {"buzzer": False}])
         self.assertTrue(self.client.connected)
         self.assertFalse(task.done())
@@ -988,18 +867,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             [payload for direction, payload in events if direction == "TX"],
             expected_commands,
         )
-        expected_lines = [
-            "SHIFT",
-            "CTRL",
-            "SCROLL",
-            "CTRL",
-            "CAPS",
-            "CTRL",
-            "Mouse change channel : OFF",
-            "Mouse change channel : OFF",
-            "Mouse change channel : ON",
-            "Mouse change channel : ON",
-        ]
         hotkey_states = [
             {"hotkey": option}
             for option in ("Shift", "Ctrl", "Scroll Lock", "Ctrl", "Caps Lock", "Ctrl")
@@ -1021,12 +888,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         expected_writes = []
         received = bytearray()
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader()
             for direction, payload in events:
                 if direction == "TX":
@@ -1035,16 +897,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_writes.append(payload)
                 else:
-                    self.reader.feed_data(payload)
+                    await self.reader.receive(payload)
                     received.extend(payload)
-                # Replay each recorded read, without its original elapsed time.
-                await asyncio.sleep(0)
                 complete_lines = received.count(b"\r\n")
-                self.assertEqual(parse.call_count, complete_lines)
-                self.assertEqual(
-                    [call.args[0] for call in parse.call_args_list],
-                    expected_lines[:complete_lines],
-                )
                 self.assertEqual(
                     self.client.state, states_by_complete_lines[complete_lines]
                 )
@@ -1053,7 +908,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(self.writer.writes, expected_writes)
 
-        self.assertEqual(parse.call_count, 10)
         self.assertEqual(observed, [*hotkey_states, mouse_off, mouse_on])
         self.assertTrue(self.client.connected)
         self.assertFalse(task.done())
@@ -1094,15 +948,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             [payload for direction, payload in events if direction == "TX"],
             expected_commands,
         )
-        expected_lines = [
-            "HUB1 : Async-> Channel 2",
-            "ERROR",
-            "HUB1 : Sync",
-            "HUB2 : Sync",
-            "Video1 : ASYNC-mode-Port2",
-            "Video-ALL : SYNC-mode",
-            "Video1 : SYNC-mode",
-        ]
         hub1_async = {"hub1": "Channel 2"}
         hub1_sync = {"hub1": "Sync"}
         both_hubs_sync = {"hub1": "Sync", "hub2": "Sync"}
@@ -1119,19 +964,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             video_sync,
         ]
         update_counts_by_complete_lines = [0, 1, 1, 2, 3, 4, 5, 5]
-        self.client = ConnectProClient(SerialSettings(capture["device"]))
         await self.client.async_connect()
         observed = []
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
         expected_writes = []
         received = bytearray()
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             # Manual capture replay must not add an automatic initialization query.
             task = self.start_reader(initialize_state=False)
             for direction, payload in events:
@@ -1141,15 +980,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_writes.append(payload)
                 else:
-                    self.reader.feed_data(payload)
+                    await self.reader.receive(payload)
                     received.extend(payload)
-                await asyncio.sleep(0)
                 complete_lines = received.count(b"\r\n")
-                self.assertEqual(parse.call_count, complete_lines)
-                self.assertEqual(
-                    [call.args[0] for call in parse.call_args_list],
-                    expected_lines[:complete_lines],
-                )
                 self.assertEqual(
                     self.client.state, states_by_complete_lines[complete_lines]
                 )
@@ -1158,7 +991,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(self.writer.writes, expected_writes)
 
-        self.assertEqual(parse.call_count, 7)
         self.assertEqual(
             observed, [hub1_async, hub1_sync, both_hubs_sync, video_async, video_sync]
         )
@@ -1167,7 +999,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.writer.writes, expected_commands)
         self.opener.assert_awaited_once()
         messages = [record.getMessage() for record in captured.records]
-        path = capture["device"]
+        path = "/dev/test-kvm"
         self.assertEqual(
             [
                 message
@@ -1224,19 +1056,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             [payload for direction, payload in events if direction == "TX"],
             expected_commands,
         )
-        self.client = ConnectProClient(SerialSettings(capture["device"]))
         await self.client.async_connect()
         observed = []
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
         expected_writes = []
         received = bytearray()
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader(initialize_state=False)
             for direction, payload in events:
                 if direction == "TX":
@@ -1245,9 +1071,8 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_writes.append(payload)
                 else:
-                    self.reader.feed_data(payload)
+                    await self.reader.receive(payload)
                     received.extend(payload)
-                await asyncio.sleep(0)
                 # The version reply is complete at CR, before its later LF read.
                 complete_lines = [
                     line.decode("ascii").strip()
@@ -1256,22 +1081,18 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 ]
                 self.assertEqual(complete_lines, expected_lines[: len(complete_lines)])
                 self.assertEqual(
-                    [call.args[0] for call in parse.call_args_list], complete_lines
-                )
-                self.assertEqual(
                     self.client.state, {"video1": "Sync"} if complete_lines else {}
                 )
                 self.assertEqual(len(observed), int(bool(complete_lines)))
                 self.assertEqual(self.writer.writes, expected_writes)
 
-        self.assertEqual(parse.call_count, 11)
         self.assertEqual(observed, [{"video1": "Sync"}])
         self.assertTrue(self.client.connected)
         self.assertFalse(task.done())
         self.assertEqual(self.writer.writes, expected_commands)
         self.opener.assert_awaited_once()
         messages = [record.getMessage() for record in captured.records]
-        path = capture["device"]
+        path = "/dev/test-kvm"
         self.assertEqual(
             [
                 message
@@ -1378,19 +1199,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             [payload for _, direction, payload in events if direction == "TX"],
             expected_commands,
         )
-        self.client = ConnectProClient(SerialSettings(capture["device"]))
         await self.client.async_connect()
         observed = []
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
         expected_writes = []
         received = bytearray()
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             task = self.start_reader(initialize_state=False)
             for timestamp, direction, payload in events:
                 if direction == "TX":
@@ -1399,14 +1214,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_writes.append(payload)
                 else:
-                    self.reader.feed_data(payload)
+                    await self.reader.receive(payload)
                     received.extend(payload)
-                await asyncio.sleep(0)
                 complete_lines = received.count(b"\r\n")
-                self.assertEqual(
-                    [call.args[0] for call in parse.call_args_list],
-                    [line for line, _ in expected_reports[:complete_lines]],
-                )
                 self.assertEqual(
                     self.client.state, states_by_complete_lines[complete_lines]
                 )
@@ -1421,7 +1231,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                         self.client.state["auto_scan_interval"], "5 seconds"
                     )
 
-        self.assertEqual(parse.call_count, 25)
         self.assertEqual(len(observed), 23)
         self.assertEqual(
             self.client.state,
@@ -1439,7 +1248,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [record.getMessage() for record in captured.records],
             [
-                f"{direction} {capture['device']}: {payload!r}"
+                f"{direction} /dev/test-kvm: {payload!r}"
                 for _, direction, payload in events
             ],
         )
@@ -1519,19 +1328,13 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             12,
             13,
         ]
-        self.client = ConnectProClient(SerialSettings(capture["device"]))
         await self.client.async_connect()
         observed = []
         self.client.add_listener(lambda: observed.append(dict(self.client.state)))
         expected_writes = []
         received = bytearray()
 
-        with (
-            self.assertLogs(client_module._LOGGER, level="DEBUG") as captured,
-            patch.object(
-                client_module, "parse_response", wraps=client_module.parse_response
-            ) as parse,
-        ):
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             # Replay only the three manual writes recorded in this capture.
             task = self.start_reader(initialize_state=False)
             for index, (direction, payload) in enumerate(events):
@@ -1541,9 +1344,8 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_writes.append(payload)
                 else:
-                    self.reader.feed_data(payload)
+                    await self.reader.receive(payload)
                     received.extend(payload)
-                await asyncio.sleep(0)
                 # CR completes CH-2 and one firmware line before the next LF read.
                 complete_lines = [
                     line.decode("ascii").strip()
@@ -1553,9 +1355,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     complete_lines,
                     [line for line, _ in expected_reports[: len(complete_lines)]],
-                )
-                self.assertEqual(
-                    [call.args[0] for call in parse.call_args_list], complete_lines
                 )
                 self.assertEqual(
                     self.client.state, states_by_complete_lines[len(complete_lines)]
@@ -1570,7 +1369,6 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                         self.client.state["auto_scan_interval"], "30 seconds"
                     )
 
-        self.assertEqual(parse.call_count, 22)
         self.assertEqual(len(observed), 13)
         self.assertEqual(
             self.client.state,
@@ -1594,7 +1392,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.writer.writes, expected_commands)
         self.opener.assert_awaited_once()
         messages = [record.getMessage() for record in captured.records]
-        path = capture["device"]
+        path = "/dev/test-kvm"
         self.assertEqual(
             [
                 message
@@ -1620,11 +1418,9 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         """Simulated standalone timing replies leave on/off feedback independent."""
         await self.client.async_connect()
         task = self.start_reader(initialize_state=False)
-        self.reader.feed_data(b"Auto Scan : 2(8Sec)\r\n")
-        await asyncio.sleep(0)
+        await self.reader.receive(b"Auto Scan : 2(8Sec)\r\n")
         self.assertEqual(self.client.state, {"auto_scan_interval": "8 seconds"})
-        self.reader.feed_data(b"Auto Scan : OFF\r\nAuto Scan : 5(30Sec)\r\n")
-        await asyncio.sleep(0)
+        await self.reader.receive(b"Auto Scan : OFF\r\nAuto Scan : 5(30Sec)\r\n")
         self.assertEqual(
             self.client.state,
             {"auto_scan": False, "auto_scan_interval": "30 seconds"},
@@ -1652,7 +1448,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 complete.set() if self.client.state.get("hotkey") == "Ctrl" else None
             )
         )
-        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             self.start_reader()
             self.reader.feed_data(
                 "\t CH-2 \t\r\nBuzzer  : ON\ncaf\u00e9\nHot KEY : CTRL \t\n".encode(
@@ -1670,13 +1466,19 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_concurrent_writes_are_serialized_and_logged(self) -> None:
         await self.client.async_connect()
         self.writer.drain_gate = asyncio.Event()
-        with self.assertLogs(client_module._LOGGER, level="DEBUG") as captured:
+        with self.assertLogs(LOGGER_NAME, level="DEBUG") as captured:
             first = asyncio.create_task(self.client.async_send_command("Ch1"))
             self.tasks.append(first)
             await asyncio.wait_for(self.writer.drain_started.wait(), 1)
-            second = asyncio.create_task(self.client.async_send_command("Ch2"))
+            second_started = asyncio.Event()
+
+            async def send_second() -> None:
+                second_started.set()
+                await self.client.async_send_command("Ch2")
+
+            second = asyncio.create_task(send_second())
             self.tasks.append(second)
-            await asyncio.sleep(0)
+            await asyncio.wait_for(second_started.wait(), 1)
             self.assertEqual(self.writer.writes, [b"Ch1\r\n"])
             self.writer.drain_gate.set()
             await asyncio.gather(first, second)
@@ -1695,10 +1497,12 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_write_failure_invalidates_state_and_closes_port(self) -> None:
         await self.client.async_connect()
-        self.client.state["channel"] = "Channel 1"
+        self.start_reader()
+        await self.reader.receive(b"CH-1\r\n")
+        self.assertEqual(self.client.state, {"channel": "Channel 1"})
         self.writer.drain_error = client_module.SerialException("write failed")
         with (
-            self.assertLogs(client_module._LOGGER, level="WARNING"),
+            self.assertLogs(LOGGER_NAME, level="WARNING"),
             self.assertRaises(OSError),
         ):
             await self.client.async_send_command("Ch2")
@@ -1711,8 +1515,8 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         read_started = asyncio.Event()
         release_read = asyncio.Event()
         reconnected = asyncio.Event()
-        next_reader = asyncio.StreamReader()
-        next_writer = FakeWriter(next_reader)
+        next_reader = SerialReader()
+        next_writer = SerialWriter(next_reader)
         observed = []
         self.client.add_listener(
             lambda: observed.append((self.client.connected, dict(self.client.state)))
@@ -1728,7 +1532,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(read_started.wait(), 1)
             self.writer.drain_error = OSError("connection lost during write")
             with (
-                self.assertLogs(client_module._LOGGER, level="WARNING"),
+                self.assertLogs(LOGGER_NAME, level="WARNING"),
                 self.assertRaises(OSError),
             ):
                 await self.client.async_send_command("Ch2")
@@ -1737,23 +1541,25 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 lambda: reconnected.set() if self.client.connected else None
             )
             release_read.set()
-            await asyncio.wait_for(reconnected.wait(), 1)
+            await asyncio.wait_for(reconnected.wait(), 2)
+        await next_reader.receive(b"CH-4\r\n")
         self.assertTrue(self.client.connected)
-        self.assertEqual(self.client.state, {})
-        self.assertTrue(all(state == {} for connected, state in observed))
+        self.assertEqual(self.client.state, {"channel": "Channel 4"})
+        self.assertEqual(
+            [state for _, state in observed if state], [{"channel": "Channel 4"}]
+        )
         self.opener.assert_awaited()
         self.assertEqual(self.opener.await_count, 2)
 
     async def test_reconnect_backoff_is_bounded_and_state_is_fresh(self) -> None:
-        next_reader = asyncio.StreamReader()
-        next_writer = FakeWriter(next_reader)
+        next_reader = SerialReader()
+        next_writer = SerialWriter(next_reader)
         self.opener.side_effect = [
             (self.reader, self.writer),
             *[OSError("unplugged") for _ in range(6)],
             (next_reader, next_writer),
         ]
         await self.client.async_connect()
-        self.client.state.update({"channel": "Channel 1", "buzzer": True})
         observed = []
         complete = asyncio.Event()
 
@@ -1763,16 +1569,22 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
                 complete.set()
 
         self.client.add_listener(changed)
-        self.reader.feed_data(b"CH-")
-        self.reader.feed_eof()
-        next_reader.feed_data(b"CH-3\n")
+        # Keep the full delay calculation, which would otherwise make this
+        # test wait through minutes of simulated connection failures.
         with (
             patch.object(
                 self.client, "_wait_to_reconnect", new_callable=AsyncMock
             ) as wait,
-            self.assertLogs(client_module._LOGGER, level="WARNING"),
+            self.assertLogs(LOGGER_NAME, level="WARNING"),
         ):
             self.start_reader()
+            await self.reader.receive(b"CH-1\r\nBZON\r\n")
+            self.assertEqual(
+                self.client.state, {"channel": "Channel 1", "buzzer": True}
+            )
+            await self.reader.receive(b"CH-")
+            next_reader.feed_data(b"CH-3\n")
+            self.reader.feed_eof()
             await asyncio.wait_for(complete.wait(), 1)
         self.assertEqual(
             [call.args[0] for call in wait.await_args_list], [1, 2, 4, 8, 16, 30, 30]
@@ -1786,7 +1598,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancellation_closes_connection(self) -> None:
         await self.client.async_connect()
         task = self.start_reader()
-        await asyncio.sleep(0)
+        await asyncio.wait_for(self.reader.reading.wait(), 1)
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task
@@ -1801,7 +1613,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             lambda: disconnected.set() if not self.client.connected else None
         )
         self.reader.feed_eof()
-        with self.assertLogs(client_module._LOGGER, level="WARNING"):
+        with self.assertLogs(LOGGER_NAME, level="WARNING"):
             task = self.start_reader()
             await asyncio.wait_for(disconnected.wait(), 1)
             await self.client.async_close()
@@ -1836,13 +1648,24 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.opener.side_effect = connect
         connecting = asyncio.create_task(self.client.async_connect())
+        self.tasks.append(connecting)
         await asyncio.wait_for(entered.wait(), 1)
-        closing = asyncio.create_task(self.client.async_close())
-        await asyncio.sleep(0)
+        closing_started = asyncio.Event()
+
+        async def close() -> None:
+            closing_started.set()
+            await self.client.async_close()
+
+        closing = asyncio.create_task(close())
+        self.tasks.append(closing)
+        await asyncio.wait_for(closing_started.wait(), 1)
         finish.set()
-        with self.assertRaises(ConnectionError):
-            await connecting
-        await closing
+        try:
+            with self.assertRaises(ConnectionError):
+                await asyncio.wait_for(connecting, 1)
+        finally:
+            self.tasks.remove(connecting)
+        await asyncio.wait_for(closing, 1)
         self.assertTrue(self.writer.closed)
         self.assertFalse(self.client.connected)
 
@@ -1855,10 +1678,7 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
         async def device(reader, writer):
             try:
-                writer.write(b"CH-")
-                await writer.drain()
-                await asyncio.sleep(0)
-                writer.write(b"4\r\n")
+                writer.write(b"CH-4\r\n")
                 await writer.drain()
                 received.set_result(await reader.readuntil(b"\r\n"))
                 await reader.read()

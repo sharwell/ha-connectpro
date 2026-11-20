@@ -2,7 +2,7 @@
   "source": "User-provided Home Assistant ConnectPro debug log",
   "timestamp_date": "2026-10-01",
   "timezone": null,
-  "device": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0",
+  "device": "/dev/test-kvm",
   "user_observations": {
     "s1": "The user pressed a physical button to return to channel 2 because scanning interrupted inputs faster than the monitors could adjust.",
     "manual_channel_report_time": "12:31:40.654",

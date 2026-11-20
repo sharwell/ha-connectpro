@@ -1,107 +1,91 @@
-"""Configuration flows using Home Assistant's real flow and entry classes."""
+"""Configuration and reconfiguration through Home Assistant's flow manager."""
 
-from __future__ import annotations
-
-from collections.abc import AsyncGenerator, Generator
-from pathlib import Path
-from types import MappingProxyType, SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
+import os
 
 import pytest
-import pytest_asyncio
+from serialx import Parity, SerialPortInfo, StopBits
 
-from custom_components.connectpro.client import SerialSettings
-from custom_components.connectpro.config_flow import ConnectProConfigFlow
-from custom_components.connectpro.const import (
-    CONF_BAUDRATE,
-    CONF_BYTESIZE,
-    CONF_DEVICE,
-    CONF_PARITY,
-    CONF_STOPBITS,
-    DEFAULT_NAME,
-    DOMAIN,
-)
+from custom_components.connectpro.const import DOMAIN
 from homeassistant.config_entries import (
     SOURCE_RECONFIGURE,
     SOURCE_USER,
-    ConfigEntries,
-    ConfigEntry,
+    ConfigEntryState,
 )
 from homeassistant.const import CONF_NAME
-from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-FLOW_MODULE = "custom_components.connectpro.config_flow"
+DEFAULT_SETTINGS = {
+    "baudrate": 115200,
+    "byte_size": 8,
+    "parity": Parity.NONE,
+    "stopbits": StopBits.ONE,
+    "xonxoff": False,
+    "rtscts": False,
+    "dsrdtr": False,
+}
+LEGACY_DATA = {"baudrate": 9600, "bytesize": 7, "parity": "E", "stopbits": 2}
+LEGACY_SETTINGS = DEFAULT_SETTINGS | {
+    "baudrate": 9600,
+    "byte_size": 7,
+    "parity": Parity.EVEN,
+    "stopbits": StopBits.TWO,
+}
 
 
-@pytest_asyncio.fixture
-async def hass(tmp_path: Path) -> AsyncGenerator[HomeAssistant]:
-    """Provide the real config entry manager without loading integrations."""
-    instance = HomeAssistant(str(tmp_path))
-    instance.config_entries = ConfigEntries(instance, {})
+async def submit(hass, data, *, entry=None):
+    """Complete a form through the same flow manager the UI uses."""
+    context = {"source": SOURCE_USER}
+    if entry is not None:
+        context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
+    form = await hass.config_entries.flow.async_init(DOMAIN, context=context)
+    assert form["type"] is FlowResultType.FORM
+    return await hass.config_entries.flow.async_configure(form["flow_id"], data)
+
+
+@pytest.fixture(params=["same path", "symlink"])
+def port_paths(tmp_path, request, monkeypatch):
+    port = tmp_path / "serial-port"
+    port.touch()
+    if request.param == "same path":
+        return str(port), str(port)
+    alias = tmp_path / "serial-alias"
     try:
-        yield instance
-    finally:
-        await instance.async_stop(force=True)
+        alias.symlink_to(port)
+    except OSError as error:
+        if getattr(error, "winerror", None) != 1314:
+            raise
+        # Windows hosts without symlink privileges can still exercise the
+        # flow's handling of two paths resolved to the same serial device.
+        realpath = os.path.realpath
+
+        def resolve(path, *args, **kwargs):
+            if path == str(alias):
+                path = port
+            return realpath(path, *args, **kwargs)
+
+        monkeypatch.setattr(os.path, "realpath", resolve)
+    return str(port), str(alias)
 
 
-@pytest.fixture
-def flow(hass: HomeAssistant) -> ConnectProConfigFlow:
-    """Return a user-initiated flow connected to Home Assistant."""
-    instance = ConnectProConfigFlow()
-    instance.hass = hass
-    instance.handler = DOMAIN
-    instance.context = {"source": SOURCE_USER}
-    return instance
-
-
-@pytest.fixture(autouse=True)
-def list_ports() -> Generator[AsyncMock]:
-    """Do not enumerate the test host's physical ports."""
-    with patch(
-        f"{FLOW_MODULE}.async_list_serial_ports", new_callable=AsyncMock
-    ) as mock:
-        mock.return_value = []
-        yield mock
-
-
-@pytest.fixture
-def client_class() -> Generator[MagicMock]:
-    """Replace only the serial client at the hardware boundary."""
-    with patch(f"{FLOW_MODULE}.ConnectProClient") as mock:
-        mock.return_value.async_connect = AsyncMock()
-        mock.return_value.async_close = AsyncMock()
-        yield mock
-
-
-def add_entry(
-    hass: HomeAssistant, data: dict, title: str = "Original KVM"
-) -> ConfigEntry:
-    """Register an existing entry without starting its physical serial reader."""
-    entry = ConfigEntry(
-        domain=DOMAIN,
-        title=title,
-        data=data,
-        options={},
-        source=SOURCE_USER,
-        unique_id=data[CONF_DEVICE],
-        version=1,
-        minor_version=1,
-        discovery_keys=MappingProxyType({}),
-    )
-    hass.config_entries._entries[entry.entry_id] = entry
-    return entry
-
-
-@pytest.mark.asyncio
-async def test_user_form_only_requests_device_and_name(
-    flow: ConnectProConfigFlow, list_ports: AsyncMock
-) -> None:
-    """Users select a port while serial framing remains automatic."""
-    list_ports.return_value = [
-        SimpleNamespace(device="COM9", product="USB serial", manufacturer="Example"),
+async def test_user_form_only_requests_device_and_name(hass, serial_ports):
+    serial_ports.ports = [
+        SerialPortInfo(
+            device="COM9",
+            resolved_device="COM9",
+            vid=None,
+            pid=None,
+            serial_number=None,
+            manufacturer="Example",
+            product="USB serial",
+            bcd_device=None,
+            interface_description=None,
+            interface_num=None,
+        )
     ]
-    result = await flow.async_step_user()
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
@@ -109,207 +93,161 @@ async def test_user_form_only_requests_device_and_name(
     fields = {
         key.schema: selector for key, selector in result["data_schema"].schema.items()
     }
-    assert set(fields) == {CONF_DEVICE, CONF_NAME}
-    assert fields[CONF_DEVICE].config["custom_value"] is True
-    assert fields[CONF_DEVICE].config["options"] == [
+    assert set(fields) == {"device", CONF_NAME}
+    assert fields["device"].config["custom_value"] is True
+    assert fields["device"].config["options"] == [
         {"value": "COM9", "label": "COM9 (USB serial)"}
     ]
-    validated = result["data_schema"]({CONF_DEVICE: "COM9"})
-    assert validated[CONF_NAME] == DEFAULT_NAME
+    assert result["data_schema"]({"device": "COM9"})[CONF_NAME] == "ConnectPro KVM"
 
 
-@pytest.mark.asyncio
-async def test_port_enumeration_failure_still_allows_manual_path(
-    flow: ConnectProConfigFlow, list_ports: AsyncMock
-) -> None:
-    """Discovery failure does not prevent entering a known serial path."""
-    list_ports.side_effect = OSError("enumeration unavailable")
-    result = await flow.async_step_user()
-    assert result["type"] is FlowResultType.FORM
-    assert result["data_schema"]({CONF_DEVICE: "COM9"})[CONF_DEVICE] == "COM9"
+async def test_port_enumeration_failure_still_allows_manual_path(hass, serial_ports):
+    serial_ports.list_error = OSError("enumeration unavailable")
+    result = await submit(hass, {"device": "COM9"})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["result"].state is ConfigEntryState.LOADED
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("name", [None, "", "  ", "  Desk KVM  "])
-async def test_success_uses_defaults_and_closes_probe(
-    flow: ConnectProConfigFlow, client_class: MagicMock, name: str | None
-) -> None:
-    """A successful probe stores normalized input and the known serial settings."""
-    user_input = {CONF_DEVICE: " COM9 "}
+async def test_success_uses_defaults_and_closes_probe(hass, serial_ports, name):
+    user_input = {"device": " COM9 "}
     if name is not None:
         user_input[CONF_NAME] = name
-    result = await flow.async_step_user(user_input)
+    result = await submit(hass, user_input)
 
-    client_class.assert_called_once_with(SerialSettings(device="COM9"))
-    client_class.return_value.async_connect.assert_awaited_once_with()
-    client_class.return_value.async_close.assert_awaited_once_with()
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == ("Desk KVM" if name == "  Desk KVM  " else DEFAULT_NAME)
-    assert result["data"] == {
-        CONF_DEVICE: "COM9",
-        CONF_NAME: result["title"],
-        CONF_BAUDRATE: 115200,
-        CONF_BYTESIZE: 8,
-        CONF_PARITY: "N",
-        CONF_STOPBITS: 1,
+    entry = result["result"]
+    assert hass.config_entries.async_get_entry(entry.entry_id) is entry
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.title == ("Desk KVM" if name == "  Desk KVM  " else "ConnectPro KVM")
+    assert entry.data == {
+        "device": "COM9",
+        CONF_NAME: entry.title,
+        "baudrate": 115200,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
     }
-    assert flow.unique_id == "COM9"
+    assert entry.unique_id == "COM9"
+    assert serial_ports.attempts == [("COM9", DEFAULT_SETTINGS)] * 2
+    probe, connection = serial_ports.sessions["COM9"]
+    assert probe.closed and probe.writes == []
+    await asyncio.wait_for(connection.reader.reading.wait(), 2)
+    assert connection.writes == [b"k1p0\r\n"]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
     [OSError("missing port"), TimeoutError("timeout"), ValueError("bad settings")],
 )
-async def test_failed_probe_closes_and_does_not_create_entry(
-    hass: HomeAssistant,
-    flow: ConnectProConfigFlow,
-    client_class: MagicMock,
-    error: Exception,
-) -> None:
-    """Every supported connection failure returns a retryable form."""
-    client_class.return_value.async_connect.side_effect = error
-    result = await flow.async_step_user({CONF_DEVICE: "COM9"})
+async def test_failed_probe_does_not_create_entry(hass, serial_ports, error):
+    serial_ports.open_errors["COM9"] = error
+    result = await submit(hass, {"device": "COM9"})
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
     assert hass.config_entries.async_entries(DOMAIN) == []
-    client_class.return_value.async_close.assert_awaited_once_with()
+    assert serial_ports.attempts == [("COM9", DEFAULT_SETTINGS)]
+    assert "COM9" not in serial_ports.sessions
 
 
-@pytest.mark.asyncio
-async def test_empty_path_never_opens_serial(
-    flow: ConnectProConfigFlow, client_class: MagicMock
-) -> None:
-    """Whitespace-only paths are rejected before probing hardware."""
-    result = await flow.async_step_user({CONF_DEVICE: "  "})
+async def test_empty_path_never_opens_serial(hass, serial_ports):
+    result = await submit(hass, {"device": "  "})
+
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {CONF_DEVICE: "invalid_device"}
-    client_class.assert_not_called()
+    assert result["errors"] == {"device": "invalid_device"}
+    assert serial_ports.attempts == []
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("requested", ["/dev/ttyUSB0", "/dev/serial/by-id/kvm"])
 async def test_duplicate_path_or_symlink_never_opens_serial(
-    hass: HomeAssistant,
-    flow: ConnectProConfigFlow,
-    client_class: MagicMock,
-    requested: str,
-) -> None:
-    """Two entries cannot claim the same physical port under different aliases."""
-    add_entry(hass, {CONF_DEVICE: "/dev/ttyUSB0"})
-    with patch(f"{FLOW_MODULE}.os.path.realpath", return_value="/dev/ttyUSB0"):
-        result = await flow.async_step_user({CONF_DEVICE: requested})
+    hass, serial_ports, add_entry, port_paths
+):
+    original, requested = port_paths
+    entry = await add_entry(original)
+    result = await submit(hass, {"device": requested})
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
-    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
-    client_class.assert_not_called()
+    assert hass.config_entries.async_entries(DOMAIN) == [entry]
+    assert serial_ports.attempts == [(original, DEFAULT_SETTINGS)]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("requested", ["/dev/ttyUSB0", "/dev/serial/by-id/kvm"])
-async def test_reconfigure_own_port_preserves_settings_without_reopening(
-    hass: HomeAssistant,
-    flow: ConnectProConfigFlow,
-    client_class: MagicMock,
-    requested: str,
-) -> None:
-    """Renaming or choosing the same port's alias does not contend with its reader."""
-    original = {
-        CONF_DEVICE: "/dev/ttyUSB0",
-        CONF_NAME: "Original KVM",
-        CONF_BAUDRATE: 9600,
-        CONF_BYTESIZE: 7,
-        CONF_PARITY: "E",
-        CONF_STOPBITS: 2,
-    }
-    entry = add_entry(hass, original)
-    flow.context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
-
-    with (
-        patch(f"{FLOW_MODULE}.os.path.realpath", return_value="/dev/ttyUSB0"),
-        patch.object(hass.config_entries, "async_schedule_reload") as reload_entry,
-    ):
-        result = await flow.async_step_reconfigure(
-            {CONF_DEVICE: requested, CONF_NAME: "Renamed KVM"}
-        )
+async def test_reconfigure_own_port_reloads_without_a_probe(
+    hass, serial_ports, add_entry, port_paths
+):
+    original, requested = port_paths
+    entry = await add_entry(original, settings=LEGACY_DATA, title="Original KVM")
+    old_connection = serial_ports.sessions[original][0]
+    result = await submit(
+        hass, {"device": requested, CONF_NAME: "Renamed KVM"}, entry=entry
+    )
+    await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
-    client_class.assert_not_called()
+    assert entry.state is ConfigEntryState.LOADED
     assert entry.title == "Renamed KVM"
-    assert entry.data == original | {CONF_DEVICE: requested, CONF_NAME: "Renamed KVM"}
-    reload_entry.assert_called_once_with(entry.entry_id)
+    assert entry.data == LEGACY_DATA | {"device": requested, CONF_NAME: "Renamed KVM"}
+    assert serial_ports.attempts == [
+        (original, LEGACY_SETTINGS),
+        (requested, LEGACY_SETTINGS),
+    ]
+    assert old_connection.closed
+    connection = serial_ports.sessions[requested][-1]
+    assert connection is not old_connection and not connection.closed
 
 
-@pytest.mark.asyncio
 async def test_reconfigure_new_port_probes_with_stored_settings(
-    hass: HomeAssistant, flow: ConnectProConfigFlow, client_class: MagicMock
-) -> None:
-    """Moving a migrated entry to another port preserves its nondefault framing."""
-    entry = add_entry(
-        hass,
-        {
-            CONF_DEVICE: "COM9",
-            CONF_BAUDRATE: 9600,
-            CONF_BYTESIZE: 7,
-            CONF_PARITY: "E",
-            CONF_STOPBITS: 2,
-        },
-    )
-    flow.context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
-
-    with patch.object(hass.config_entries, "async_schedule_reload"):
-        result = await flow.async_step_reconfigure({CONF_DEVICE: "COM10"})
+    hass, serial_ports, add_entry
+):
+    entry = await add_entry("COM9", settings=LEGACY_DATA)
+    result = await submit(hass, {"device": "COM10"}, entry=entry)
+    await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
-    client_class.assert_called_once_with(
-        SerialSettings(
-            device="COM10", baudrate=9600, bytesize=7, parity="E", stopbits=2
-        )
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data["device"] == "COM10"
+    assert serial_ports.attempts == [
+        ("COM9", LEGACY_SETTINGS),
+        ("COM10", LEGACY_SETTINGS),
+        ("COM10", LEGACY_SETTINGS),
+    ]
+    assert serial_ports.sessions["COM9"][0].closed
+    probe, connection = serial_ports.sessions["COM10"]
+    assert probe.closed and probe.writes == []
+    assert not connection.closed
+
+
+async def test_failed_reconfigure_keeps_original_entry(hass, serial_ports, add_entry):
+    entry = await add_entry(
+        "COM9", title="Original KVM", settings={CONF_NAME: "Original KVM"}
     )
-    client_class.return_value.async_connect.assert_awaited_once_with()
-    client_class.return_value.async_close.assert_awaited_once_with()
-    assert entry.data[CONF_DEVICE] == "COM10"
-
-
-@pytest.mark.asyncio
-async def test_failed_reconfigure_keeps_original_entry(
-    hass: HomeAssistant, flow: ConnectProConfigFlow, client_class: MagicMock
-) -> None:
-    """An unavailable replacement port does not overwrite a working configuration."""
-    original = {CONF_DEVICE: "COM9", CONF_NAME: "Original KVM"}
-    entry = add_entry(hass, original)
-    flow.context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
-    client_class.return_value.async_connect.side_effect = OSError("unavailable")
-
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload_entry:
-        result = await flow.async_step_reconfigure(
-            {CONF_DEVICE: "COM10", CONF_NAME: "New KVM"}
-        )
+    serial_ports.open_errors["COM10"] = OSError("unavailable")
+    result = await submit(hass, {"device": "COM10", CONF_NAME: "New KVM"}, entry=entry)
+    await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
-    assert entry.data == original
+    assert entry.data == {"device": "COM9", CONF_NAME: "Original KVM"}
     assert entry.title == "Original KVM"
-    client_class.return_value.async_close.assert_awaited_once_with()
-    reload_entry.assert_not_called()
+    assert not serial_ports.sessions["COM9"][0].closed
+    assert serial_ports.attempts == [
+        ("COM9", DEFAULT_SETTINGS),
+        ("COM10", DEFAULT_SETTINGS),
+    ]
 
 
-@pytest.mark.asyncio
-async def test_reconfigure_rejects_other_entrys_port(
-    hass: HomeAssistant, flow: ConnectProConfigFlow, client_class: MagicMock
-) -> None:
-    """Reconfiguration still enforces exclusive ownership of another KVM port."""
-    entry = add_entry(hass, {CONF_DEVICE: "COM9"})
-    add_entry(hass, {CONF_DEVICE: "COM10"})
-    flow.context = {"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id}
-
-    result = await flow.async_step_reconfigure({CONF_DEVICE: "COM10"})
+async def test_reconfigure_rejects_other_entrys_port(hass, serial_ports, add_entry):
+    entry = await add_entry("COM9")
+    await add_entry("COM10")
+    result = await submit(hass, {"device": "COM10"}, entry=entry)
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
-    assert entry.data[CONF_DEVICE] == "COM9"
-    client_class.assert_not_called()
+    assert entry.data["device"] == "COM9"
+    assert serial_ports.attempts == [
+        ("COM9", DEFAULT_SETTINGS),
+        ("COM10", DEFAULT_SETTINGS),
+    ]

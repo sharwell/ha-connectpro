@@ -2,7 +2,7 @@
   "source": "User-provided Home Assistant ConnectPro debug log",
   "timestamp_date": "2026-10-01",
   "timezone": null,
-  "device": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0",
+  "device": "/dev/test-kvm",
   "user_observations": {
     "hub1_routing": "h1p2 assigned Hub1 on both linked KVMs to machine 2 independently of the current channel.",
     "hub_sync": "h0p0 returned both hubs to Sync.",

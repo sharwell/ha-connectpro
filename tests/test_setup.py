@@ -1,433 +1,377 @@
-"""Integration lifecycle and device-targeted actions on real HA objects."""
+"""Entry lifecycle, migration, and command routing through real HA APIs."""
 
-from types import MappingProxyType, SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+import asyncio
 
 import pytest
 import voluptuous as vol
 
-from custom_components.connectpro import (
-    PLATFORMS,
-    async_setup,
-    async_setup_entry,
-    async_unload_entry,
-    serial_settings,
-)
-from custom_components.connectpro.client import SerialSettings
-from homeassistant.config_entries import ConfigEntries, ConfigEntry, ConfigEntryState
+from custom_components.connectpro import client
+from custom_components.connectpro.const import DOMAIN
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import (
-    ConfigEntryNotReady,
-    HomeAssistantError,
-    ServiceValidationError,
-)
+from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
+
+STARTUP_QUERY = b"k1p0\r\n"
+MODEL_REPORT = b"UDP2_14AP_U3 : Version_Number - 0009 - D1223\r\n"
 
 
-@pytest.fixture
-async def hass(tmp_path):
-    """Provide actual HA service, event, entry, and device registries."""
-    instance = HomeAssistant(str(tmp_path))
-    instance.config_entries = ConfigEntries(instance, {})
-    await dr.async_load(instance)
-    await er.async_load(instance)
-    yield instance
-    await instance.async_stop(force=True)
+def get_device(hass, entry):
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device is not None
+    return device
 
 
-def make_entry(domain="connectpro", state=ConfigEntryState.NOT_LOADED):
-    return ConfigEntry(
-        domain=domain,
-        title="Test KVM",
-        data={"device": "/dev/test-kvm"},
-        options={},
-        source="user",
-        unique_id="/dev/test-kvm",
-        version=1,
-        minor_version=1,
-        discovery_keys=MappingProxyType({}),
-        state=state,
+def register_entity(hass, entry, domain, key, **kwargs):
+    return er.async_get(hass).async_get_or_create(
+        domain, DOMAIN, f"{entry.entry_id}_{key}", config_entry=entry, **kwargs
     )
 
 
-def make_client():
-    listeners = set()
-
-    def add_listener(callback):
-        listeners.add(callback)
-        return lambda: listeners.discard(callback)
-
-    def notify():
-        for callback in tuple(listeners):
-            callback()
-
-    return SimpleNamespace(
-        state={},
-        connected=True,
-        listeners=listeners,
-        add_listener=Mock(side_effect=add_listener),
-        notify=notify,
-        async_connect=AsyncMock(),
-        async_close=AsyncMock(),
-        async_run=AsyncMock(),
-        async_send_command=AsyncMock(),
+async def send(hass, device_id, command="Ch2"):
+    await hass.services.async_call(
+        DOMAIN,
+        "send_command",
+        {"device_id": device_id, "command": command},
+        blocking=True,
     )
 
 
-def register_device(hass, entry):
-    """Model an entry already persisted by the config-entry manager."""
-    hass.config_entries._entries[entry.entry_id] = entry
-    return dr.async_get(hass).async_get_or_create(
+async def test_setup_queries_once_after_entity_registration_and_closes_on_stop(
+    hass, add_entry, serial_ports, monkeypatch
+):
+    ready_at_query = []
+
+    async def open_serial(**settings):
+        reader, writer = await serial_ports.open(**settings)
+        original_write = writer.write
+
+        def write(data):
+            original_write(data)
+            if data == STARTUP_QUERY:
+                ready_at_query.append(
+                    {
+                        registered.translation_key
+                        for registered in er.async_get(hass).entities.values()
+                        if hass.states.get(registered.entity_id) is not None
+                    }
+                )
+
+        writer.write = write
+        return reader, writer
+
+    monkeypatch.setattr(client, "open_serial_connection", open_serial)
+    entry = await add_entry()
+    (port,) = serial_ports.sessions["test-kvm"]
+    await asyncio.wait_for(port.reader.reading.wait(), 2)
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert [url for url, settings in serial_ports.attempts] == ["test-kvm"]
+    assert port.writes == [STARTUP_QUERY]
+    assert ready_at_query == [
+        {
+            "channel",
+            "hotkey",
+            "auto_scan",
+            "audio",
+            "video1",
+            "video2",
+            "hub1",
+            "hub2",
+            "reset",
+            "sync_usb_hubs",
+            "buzzer",
+            "mouse_change_channel",
+        }
+    ]
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+
+    assert port.closed
+
+
+async def test_unavailable_port_requests_ha_retry_and_preserves_legacy_registry(
+    hass, add_entry, serial_ports
+):
+    entry = await add_entry(disabled=True)
+    old_entity = register_entity(hass, entry, "sensor", "audio")
+    serial_ports.open_errors["test-kvm"] = OSError("port unavailable")
+
+    assert not await hass.config_entries.async_set_disabled_by(entry.entry_id, None)
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert "port unavailable" in entry.reason
+    assert serial_ports.sessions == {}
+    assert er.async_get(hass).async_get(old_entity.entity_id) is not None
+
+
+async def test_forwarding_exception_closes_serial_port_without_migrating_entities(
+    hass, add_entry, serial_ports, monkeypatch
+):
+    entry = await add_entry(disabled=True)
+    old_entity = register_entity(hass, entry, "button", "sync_video1")
+
+    async def fail_forwarding(entry, platforms):
+        raise RuntimeError("platform forwarding failed")
+
+    # Force the exceptional return from HA's forwarding API. A normal
+    # platform-specific failure is handled inside the framework.
+    monkeypatch.setattr(
+        hass.config_entries, "async_forward_entry_setups", fail_forwarding
+    )
+
+    assert not await hass.config_entries.async_set_disabled_by(entry.entry_id, None)
+
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    (port,) = serial_ports.sessions["test-kvm"]
+    assert port.closed and port.writes == []
+    assert er.async_get(hass).async_get(old_entity.entity_id) is not None
+
+
+async def test_setup_removes_only_replaced_routing_registry_entries(hass, add_entry):
+    entry = await add_entry(disabled=True)
+    other_entry = await add_entry("other-kvm", disabled=True)
+    registry = er.async_get(hass)
+    obsolete = [
+        register_entity(hass, entry, domain, key, suggested_object_id=f"legacy_{key}")
+        for domain, keys in (
+            ("sensor", ("audio", "hub1", "hub2", "video1")),
+            ("button", ("sync_audio", "sync_video1", "sync_video_outputs")),
+        )
+        for key in keys
+    ]
+    preserved = [
+        register_entity(hass, entry, "button", "reset"),
+        register_entity(hass, entry, "button", "sync_usb_hubs"),
+        register_entity(hass, entry, "sensor", "unrelated"),
+        register_entity(hass, entry, "binary_sensor", "audio"),
+        register_entity(hass, other_entry, "sensor", "audio"),
+        registry.async_get_or_create(
+            "sensor", "other", f"{entry.entry_id}_audio", config_entry=entry
+        ),
+    ]
+
+    assert await hass.config_entries.async_set_disabled_by(entry.entry_id, None)
+
+    assert all(registry.async_get(old.entity_id) is None for old in obsolete)
+    assert all(registry.async_get(old.entity_id) is not None for old in preserved)
+    for key in ("audio", "hub1", "hub2", "video1", "video2"):
+        entity_id = registry.async_get_entity_id(
+            "select", DOMAIN, f"{entry.entry_id}_{key}"
+        )
+        assert entity_id and hass.states.get(entity_id) is not None
+
+
+async def test_model_report_updates_existing_device_with_all_entities_disabled(
+    hass, add_entry, serial_ports
+):
+    entry = await add_entry(disabled=True)
+    registry = dr.async_get(hass)
+    device = registry.async_get_or_create(
         config_entry_id=entry.entry_id,
-        identifiers={(entry.domain, entry.entry_id)},
+        identifiers={(DOMAIN, entry.entry_id)},
+        manufacturer="ConnectPro",
         name=entry.title,
     )
-
-
-def test_defaults_and_legacy_serial_settings():
-    assert serial_settings({"device": "/dev/kvm"}) == SerialSettings("/dev/kvm")
-    settings = serial_settings(
-        {
-            "device": "/dev/kvm",
-            "baudrate": 9600,
-            "bytesize": 7,
-            "parity": "E",
-            "stopbits": 2,
-        }
-    )
-    assert (
-        settings.baudrate,
-        settings.bytesize,
-        settings.parity,
-        settings.stopbits,
-    ) == (9600, 7, "E", 2)
-
-
-async def test_setup_opens_one_shared_connection_and_closes_on_stop(hass):
-    entry, client = make_entry(), make_client()
-
-    async def forward_platforms(entry, platforms):
-        client.async_run.assert_not_called()
-        client.add_listener.assert_not_called()
-
-    with (
-        patch(
-            "custom_components.connectpro.ConnectProClient", return_value=client
-        ) as factory,
-        patch.object(
-            hass.config_entries,
-            "async_forward_entry_setups",
-            new=AsyncMock(side_effect=forward_platforms),
-        ) as forward,
-    ):
-        assert await async_setup_entry(hass, entry)
-        factory.assert_called_once_with(SerialSettings("/dev/test-kvm"))
-        client.async_connect.assert_awaited_once()
-        assert entry.runtime_data is client
-        forward.assert_awaited_once_with(entry, PLATFORMS)
-        client.async_run.assert_called_once_with(initialize_state=True)
-        hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
-        await hass.async_block_till_done()
-        client.async_run.assert_awaited_once_with(initialize_state=True)
-        client.async_close.assert_awaited_once()
-
-
-async def test_setup_failure_releases_connection_and_requests_ha_retry(hass):
-    entry = make_entry()
-    register_device(hass, entry)
-    registry = er.async_get(hass)
-    previous = registry.async_get_or_create(
-        "sensor", "connectpro", f"{entry.entry_id}_audio", config_entry=entry
-    )
-    client = make_client()
-    client.async_connect.side_effect = OSError("port unavailable")
-    with patch("custom_components.connectpro.ConnectProClient", return_value=client):
-        with pytest.raises(ConfigEntryNotReady, match="port unavailable"):
-            await async_setup_entry(hass, entry)
-    client.async_close.assert_awaited_once()
-    client.async_run.assert_not_called()
-    client.add_listener.assert_not_called()
-    assert registry.async_get(previous.entity_id) is not None
-
-
-async def test_platform_setup_failure_closes_serial_port(hass):
-    entry = make_entry()
-    register_device(hass, entry)
-    registry = er.async_get(hass)
-    previous = registry.async_get_or_create(
-        "button", "connectpro", f"{entry.entry_id}_sync_video1", config_entry=entry
-    )
-    client = make_client()
-    with (
-        patch("custom_components.connectpro.ConnectProClient", return_value=client),
-        patch.object(
-            hass.config_entries,
-            "async_forward_entry_setups",
-            new=AsyncMock(side_effect=RuntimeError("platform failed")),
-        ),
-        pytest.raises(RuntimeError, match="platform failed"),
-    ):
-        await async_setup_entry(hass, entry)
-    client.async_close.assert_awaited_once()
-    client.async_run.assert_not_called()
-    client.add_listener.assert_not_called()
-    assert registry.async_get(previous.entity_id) is not None
-
-
-async def test_successful_setup_removes_only_replaced_routing_registry_entries(hass):
-    """Conversion removes exact old entries while preserving all unrelated entities."""
-    entry, other_entry, client = make_entry(), make_entry(), make_client()
-    register_device(hass, entry)
-    register_device(hass, other_entry)
-    registry = er.async_get(hass)
-    obsolete = []
+    registry.async_update_device(device.id, name_by_user="My desk KVM")
     for domain, keys in (
-        ("sensor", ("audio", "hub1", "hub2", "video1")),
-        ("button", ("sync_audio", "sync_video1", "sync_video_outputs")),
+        (
+            "select",
+            (
+                "channel",
+                "hotkey",
+                "auto_scan",
+                "audio",
+                "video1",
+                "video2",
+                "hub1",
+                "hub2",
+            ),
+        ),
+        ("button", ("reset", "sync_usb_hubs")),
+        ("switch", ("buzzer", "mouse_change_channel")),
     ):
         for key in keys:
-            obsolete.append(
-                registry.async_get_or_create(
-                    domain,
-                    "connectpro",
-                    f"{entry.entry_id}_{key}",
-                    config_entry=entry,
-                    suggested_object_id=f"custom_name_{key}",
-                ).entity_id
+            register_entity(
+                hass,
+                entry,
+                domain,
+                key,
+                disabled_by=er.RegistryEntryDisabler.USER,
+                device_id=device.id,
             )
 
-    preserved = []
-    for domain, platform, key, owner in (
-        ("button", "connectpro", "reset", entry),
-        ("button", "connectpro", "sync_usb_hubs", entry),
-        ("sensor", "connectpro", "unrelated", entry),
-        ("binary_sensor", "connectpro", "audio", entry),
-        ("sensor", "other", "audio", entry),
-        ("sensor", "connectpro", "audio", other_entry),
-    ):
-        preserved.append(
-            registry.async_get_or_create(
-                domain, platform, f"{owner.entry_id}_{key}", config_entry=owner
-            ).entity_id
-        )
-
-    async def forward_platforms(loaded_entry, platforms):
-        assert loaded_entry is entry
-        assert all(registry.async_get(entity_id) is not None for entity_id in obsolete)
-        for key in ("audio", "hub1", "hub2", "video1", "video2"):
-            preserved.append(
-                registry.async_get_or_create(
-                    "select",
-                    "connectpro",
-                    f"{entry.entry_id}_{key}",
-                    config_entry=entry,
-                ).entity_id
-            )
-
-    async def run_reader(*, initialize_state):
-        assert initialize_state
-        assert all(registry.async_get(entity_id) is None for entity_id in obsolete)
-
-    client.async_run.side_effect = run_reader
-    with (
-        patch("custom_components.connectpro.ConnectProClient", return_value=client),
-        patch.object(
-            hass.config_entries,
-            "async_forward_entry_setups",
-            new=AsyncMock(side_effect=forward_platforms),
-        ),
-    ):
-        assert await async_setup_entry(hass, entry)
-    await hass.async_block_till_done()
-    assert all(registry.async_get(entity_id) is None for entity_id in obsolete)
-    assert set(registry.entities) == set(preserved)
-    await entry._async_process_on_unload(hass)
-
-
-async def test_device_model_updates_without_enabled_entities_and_survives_disconnect(
-    hass,
-):
-    """An entry listener persists metadata independently of entity subscriptions."""
-    entry, client = make_entry(), make_client()
-    device = register_device(hass, entry)
-    registry = dr.async_get(hass)
-    registry.async_update_device(
-        device.id, manufacturer="ConnectPro", name_by_user="My desk KVM"
+    assert await hass.config_entries.async_set_disabled_by(entry.entry_id, None)
+    controls = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    assert all(
+        control.disabled and hass.states.get(control.entity_id) is None
+        for control in controls
     )
-    assert device.model is None
+    (port,) = serial_ports.sessions["test-kvm"]
+    model_updates = []
 
-    async def run_reader(*, initialize_state):
-        assert initialize_state
-        assert len(client.listeners) == 1
+    @callback
+    def record(event):
+        if event.data["device_id"] == device.id and "model" in event.data.get(
+            "changes", {}
+        ):
+            model_updates.append(get_device(hass, entry).model)
 
-    client.async_run.side_effect = run_reader
-    with (
-        patch("custom_components.connectpro.ConnectProClient", return_value=client),
-        patch.object(
-            hass.config_entries, "async_forward_entry_setups", new=AsyncMock()
-        ),
-        patch.object(
-            registry, "async_update_device", wraps=registry.async_update_device
-        ) as update_device,
-    ):
-        assert await async_setup_entry(hass, entry)
+    unsubscribe = hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, record)
+    try:
+        await port.reader.receive(b"UDP2_14AP_U3 : Version_Number - \r\n")
+        assert get_device(hass, entry).model is None
+        await port.reader.receive(MODEL_REPORT)
+        await port.reader.receive(MODEL_REPORT)
         await hass.async_block_till_done()
-        client.add_listener.assert_called_once()
-        assert len(client.listeners) == 1
-        for incomplete_state in ({}, {"model": ""}, {"model": False}):
-            client.state.clear()
-            client.state.update(incomplete_state)
-            client.notify()
-        update_device.assert_not_called()
 
-        client.state["model"] = "UDP2-14AP"
-        client.notify()
-        update_device.assert_called_once_with(device.id, model="UDP2-14AP")
-        updated = registry.async_get(device.id)
+        updated = get_device(hass, entry)
+        assert updated.id == device.id
         assert updated.model == "UDP2-14AP"
-        assert updated.identifiers == {("connectpro", entry.entry_id)}
+        assert updated.identifiers == {(DOMAIN, entry.entry_id)}
         assert updated.manufacturer == "ConnectPro"
         assert updated.name == entry.title
         assert updated.name_by_user == "My desk KVM"
+        assert model_updates == ["UDP2-14AP"]
 
-        client.notify()
-        client.connected = False
-        client.state.clear()
-        client.notify()
-        assert registry.async_get(device.id).model == "UDP2-14AP"
-        update_device.assert_called_once_with(device.id, model="UDP2-14AP")
-
-        with patch.object(
-            hass.config_entries,
-            "async_unload_platforms",
-            new=AsyncMock(return_value=True),
-        ):
-            assert await async_unload_entry(hass, entry)
-        # Home Assistant runs entry callbacks after successful integration unload.
-        await entry._async_process_on_unload(hass)
-        assert client.listeners == set()
-        client.state["model"] = "UDP2-14AP"
-        client.notify()
-        update_device.assert_called_once_with(device.id, model="UDP2-14AP")
+        port.reader.feed_eof()
+        await asyncio.wait_for(port.closed_event.wait(), 2)
+        assert get_device(hass, entry).model == "UDP2-14AP"
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        assert model_updates == ["UDP2-14AP"]
+    finally:
+        unsubscribe()
 
 
-async def test_device_model_callback_tolerates_an_unregistered_device(hass):
-    """A model report never creates a second device when registration is absent."""
-    entry, client = make_entry(), make_client()
-    with (
-        patch("custom_components.connectpro.ConnectProClient", return_value=client),
-        patch.object(
-            hass.config_entries, "async_forward_entry_setups", new=AsyncMock()
-        ),
-    ):
-        assert await async_setup_entry(hass, entry)
-    client.state["model"] = "UDP2-14AP"
-    client.notify()
-    assert (
-        dr.async_get(hass).async_get_device(
-            identifiers={("connectpro", entry.entry_id)}
-        )
-        is None
+async def test_model_report_does_not_recreate_a_removed_device(
+    hass, add_entry, serial_ports
+):
+    entry = await add_entry()
+    registry = dr.async_get(hass)
+    registry.async_remove_device(get_device(hass, entry).id)
+    (port,) = serial_ports.sessions["test-kvm"]
+
+    await port.reader.receive(MODEL_REPORT)
+
+    assert registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)}) is None
+    assert not port.closed
+
+
+async def test_unload_closes_serial_and_removes_states(hass, add_entry, serial_ports):
+    entry = await add_entry()
+    (port,) = serial_ports.sessions["test-kvm"]
+    await port.reader.receive(b"CH-2\r\n")
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+    assert port.closed
+    assert entry.state is ConfigEntryState.NOT_LOADED
+    channel = er.async_get(hass).async_get_entity_id(
+        "select", DOMAIN, f"{entry.entry_id}_channel"
     )
-    await entry._async_process_on_unload(hass)
-    assert client.listeners == set()
+    assert hass.states.get(channel).state == "unavailable"
 
 
-@pytest.mark.parametrize("unload_ok", [True, False])
-async def test_unload_closes_port_only_when_platforms_unload(hass, unload_ok):
-    entry = make_entry()
-    entry.runtime_data = client = make_client()
-    with patch.object(
-        hass.config_entries,
-        "async_unload_platforms",
-        new=AsyncMock(return_value=unload_ok),
-    ) as unload:
-        assert await async_unload_entry(hass, entry) is unload_ok
-        unload.assert_awaited_once_with(entry, PLATFORMS)
-    assert client.async_close.await_count == int(unload_ok)
+async def test_refused_platform_unload_preserves_serial_session(
+    hass, add_entry, serial_ports, monkeypatch
+):
+    entry = await add_entry()
+    (port,) = serial_ports.sessions["test-kvm"]
+
+    async def refuse_unload(entry, platforms):
+        return False
+
+    # Inject a failed framework unload to exercise the port ownership guard.
+    with monkeypatch.context() as context:
+        context.setattr(hass.config_entries, "async_unload_platforms", refuse_unload)
+        assert not await hass.config_entries.async_unload(entry.entry_id)
+        assert not port.closed
+
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    assert port.closed
 
 
 async def test_command_action_is_registered_before_any_entry_loads(hass):
-    assert await async_setup(hass, {})
-    assert hass.services.has_service("connectpro", "send_command")
+    assert await async_setup_component(hass, DOMAIN, {})
+    assert hass.services.has_service(DOMAIN, "send_command")
+
     with pytest.raises(ServiceValidationError, match="does not exist"):
-        await hass.services.async_call(
-            "connectpro",
-            "send_command",
-            {"device_id": "missing", "command": "Ch2"},
-            blocking=True,
-        )
+        await send(hass, "missing")
 
 
-async def test_command_action_targets_only_the_selected_device(hass):
-    await async_setup(hass, {})
-    entry = make_entry(state=ConfigEntryState.LOADED)
-    entry.runtime_data = client = make_client()
-    device = register_device(hass, entry)
-    await hass.services.async_call(
-        "connectpro",
-        "send_command",
-        {"device_id": device.id, "command": "Ch2"},
-        blocking=True,
-    )
-    client.async_send_command.assert_awaited_once_with("Ch2")
-
-
-async def test_command_action_rejects_another_integrations_device(hass):
-    await async_setup(hass, {})
-    device = register_device(
-        hass, make_entry(domain="other", state=ConfigEntryState.LOADED)
-    )
-    with pytest.raises(ServiceValidationError, match="belonging to ConnectPro"):
-        await hass.services.async_call(
-            "connectpro",
-            "send_command",
-            {"device_id": device.id, "command": "Ch2"},
-            blocking=True,
-        )
-
-
-async def test_command_action_reports_unloaded_device(hass):
-    await async_setup(hass, {})
-    device = register_device(hass, make_entry())
-    with pytest.raises(HomeAssistantError, match="not loaded"):
-        await hass.services.async_call(
-            "connectpro",
-            "send_command",
-            {"device_id": device.id, "command": "Ch2"},
-            blocking=True,
-        )
-
-
-@pytest.mark.parametrize(
-    ("error", "expected"),
-    [
-        (ValueError("invalid command"), ServiceValidationError),
-        (OSError("disconnected"), HomeAssistantError),
-    ],
-)
-async def test_command_action_surfaces_validation_and_transport_errors(
-    hass, error, expected
+async def test_command_action_targets_only_the_selected_device(
+    hass, add_entry, serial_ports
 ):
-    await async_setup(hass, {})
-    entry = make_entry(state=ConfigEntryState.LOADED)
-    entry.runtime_data = client = make_client()
-    client.async_send_command.side_effect = error
-    device = register_device(hass, entry)
-    with pytest.raises(expected, match=str(error)):
-        await hass.services.async_call(
-            "connectpro",
-            "send_command",
-            {"device_id": device.id, "command": "Ch2"},
-            blocking=True,
-        )
+    first = await add_entry("first-port")
+    await add_entry("second-port")
+    first_port = serial_ports.sessions["first-port"][0]
+    second_port = serial_ports.sessions["second-port"][0]
+    await asyncio.wait_for(first_port.reader.reading.wait(), 2)
+    await asyncio.wait_for(second_port.reader.reading.wait(), 2)
+
+    await send(hass, get_device(hass, first).id)
+
+    assert first_port.writes == [STARTUP_QUERY, b"Ch2\r\n"]
+    assert second_port.writes == [STARTUP_QUERY]
+
+
+async def test_command_action_rejects_another_integrations_device(hass, add_entry):
+    other = await add_entry(domain="input_boolean", disabled=True)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=other.entry_id,
+        identifiers={(other.domain, "other-device")},
+    )
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    with pytest.raises(ServiceValidationError, match="belonging to ConnectPro"):
+        await send(hass, device.id)
+
+
+async def test_command_action_reports_unloaded_device(hass, add_entry, serial_ports):
+    entry = await add_entry(disabled=True)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)}
+    )
+
+    with pytest.raises(HomeAssistantError, match="not loaded"):
+        await send(hass, device.id)
+    assert serial_ports.attempts == []
+
+
+async def test_command_action_rejects_invalid_payload_without_a_write(
+    hass, add_entry, serial_ports
+):
+    entry = await add_entry()
+    (port,) = serial_ports.sessions["test-kvm"]
+    await asyncio.wait_for(port.reader.reading.wait(), 2)
+
+    with pytest.raises(ServiceValidationError, match="printable ASCII"):
+        await send(hass, get_device(hass, entry).id, "Ch2\r\nW0")
+
+    assert port.writes == [STARTUP_QUERY]
+    assert not port.closed
+
+
+async def test_command_action_surfaces_transport_failure(hass, add_entry, serial_ports):
+    entry = await add_entry()
+    (port,) = serial_ports.sessions["test-kvm"]
+    await asyncio.wait_for(port.reader.reading.wait(), 2)
+    port.drain_error = OSError("disconnected")
+
+    with pytest.raises(HomeAssistantError, match="disconnected"):
+        await send(hass, get_device(hass, entry).id)
+
+    assert port.closed
 
 
 async def test_command_action_requires_explicit_device(hass):
-    await async_setup(hass, {})
+    assert await async_setup_component(hass, DOMAIN, {})
+
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(
-            "connectpro", "send_command", {"command": "Ch2"}, blocking=True
+            DOMAIN, "send_command", {"command": "Ch2"}, blocking=True
         )
