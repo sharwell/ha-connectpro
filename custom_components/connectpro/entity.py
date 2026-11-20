@@ -20,7 +20,6 @@ class ConnectProEntity(Entity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_device_info: DeviceInfo
 
     def __init__(self, entry: ConnectProConfigEntry, key: str) -> None:
         """Initialize the entity and associate it with the KVM device."""
@@ -28,20 +27,20 @@ class ConnectProEntity(Entity):
         self._state_key = key
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_translation_key = key
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer="ConnectPro",
-            name=entry.title or "ConnectPro KVM",
-        )
+        self._device_identifier = (DOMAIN, entry.entry_id)
+        self._device_name = entry.title or "ConnectPro KVM"
 
     @property
     def device_info(self) -> DeviceInfo:
         """Describe the shared device, including a model only when reported."""
-        device_info = self._attr_device_info.copy()
         model = self._client.state.get("model")
-        if isinstance(model, str) and model:
-            device_info["model"] = model
-        return device_info
+        model_info = {"model": model} if isinstance(model, str) and model else {}
+        return DeviceInfo(
+            identifiers={self._device_identifier},
+            manufacturer="ConnectPro",
+            name=self._device_name,
+            **model_info,
+        )
 
     @property
     def available(self) -> bool:

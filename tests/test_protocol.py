@@ -2,17 +2,9 @@
 
 from __future__ import annotations
 
-import importlib.util
 import unittest
-from pathlib import Path
 
-_SOURCE = (
-    Path(__file__).resolve().parents[1] / "custom_components/connectpro/protocol.py"
-)
-_SPEC = importlib.util.spec_from_file_location("connectpro_protocol_test", _SOURCE)
-assert _SPEC is not None and _SPEC.loader is not None
-protocol = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(protocol)
+from custom_components.connectpro import protocol
 
 
 class ProtocolTests(unittest.TestCase):

@@ -1,88 +1,36 @@
 # ConnectPro KVM command reference
 
-This file records the ConnectPro KVM serial protocol details collected so
-far from the current Home Assistant setup:
+This reference documents ConnectPro KVM commands, replies, and their
+observed effects. For installation, controls, and troubleshooting, see the
+[ConnectPro KVM README](../README.md).
 
-- `Configure serial port when Home Assistant starts`
-- `Process serial sensor inputs`
-- The YAML definition of the stock serial sensor
-- `shell_command.yaml`
-- The script with alias `KVM - request channel`
-- Dashboard channel buttons and the button labeled `Reset`
-- An email transcript of the output reported after sending `K1P0`
-- A debug log from manually sending `K1P0` through this integration on
-  2026-10-01, with the user's daisy-chain context
-- A later debug log and physical observations of `K1P1`, `K2P1`, and
-  channel-2 button presses in a two-KVM chain on 2026-10-01
-- A subsequent capture of `K1P1`, `K1P0`, and a physical channel-2 button
-  press on 2026-10-01, plus a separate captured `K2P0` / `ERROR` exchange
-- A captured `W0` exchange on 2026-10-01 and the user's observation that
-  all displays cycled off and on; later channel feedback was unrelated
-- A captured `bzon`, `BZON`, and `BZOFF` sequence on 2026-10-01, with
-  matching `BZON` / `BZOFF` feedback, audible buzzer confirmation, and
-  the user's qualified report that the commands appear to affect both KVMs
-- A captured sequence of lowercase hotkey commands and lowercase/uppercase
-  mouse channel-switching commands on 2026-10-01, with physical verification
-  of both features and their effect on both linked KVMs
-- The user's confirmation on 2026-10-01 that lowercase `k1p0` can obtain
-  current entity state after loading, configuring, and initializing the
-  integration
-- A captured sequence of lowercase USB hub and video routing commands on
-  2026-10-01, including a rejected `h1p0`, a two-hub Sync reset, and both
-  global and individual video Sync replies; the user observed Hub 1 being
-  assigned to machine 2 on both linked KVMs independently of the channel,
-  followed by physical confirmation of Video 1's fixed routing across both
-  units and its independent return to Sync
-- Captured lowercase UART board-selection commands and a rejected `v3p0`
-  on 2026-10-01, including component version and `Ready-0` diagnostics
-- Captured lowercase audio and auto-scan commands on 2026-10-01, with all
-  five scan interval replies and 5-second channel cycling; the user
-  subsequently verified audio fixed/following behavior and the effect of
-  both audio routing and auto-scan on both linked KVMs
-- The user's confirmation that the `UDP2_14AP_U3` identifier in a `k1p0`
-  report identifies the retail model `UDP2-14AP`; response indicators for
-  other models have not been supplied
-- A captured lowercase `s5` / `k1p0` / `s0` sequence on 2026-10-01 with
-  explicit Video 1 and Video 2 Sync state in the status report, but no
-  scan enabled-state or interval information in that report
-- The 2013 StarTech SV231DVIUDDM manual's serial command table, used as
-  comparison evidence rather than a ConnectPro protocol specification
+- [Serial settings](#serial-settings) and the [command catalog](#command-catalog)
+  record the original Home Assistant YAML and shell configuration.
+- [Captured exchanges](#captured-exchanges) document bytes logged by the
+  integration and the physical effects reported alongside those captures.
+- [Current integration behavior](#current-integration-behavior) explains how
+  the driver uses the replies for routing, model, and connection state.
+- [Hardware verification gaps](#hardware-verification-gaps) identify what
+  still needs evidence from an isolated KVM or a different chain.
 
-These sources establish port configuration, outgoing command payloads,
-dashboard actions, and response-to-helper mappings. The email transcript
-associates one response report with `K1P0` without preserving raw bytes or
-timing. The subsequent debug logs preserve sent and received bytes, read
-boundaries, and host log timestamps. The targeted channel test also records
-which physical KVM changed channel. The meanings of every command are not
-yet established.
-
-The tables below preserve the original YAML setup as protocol evidence.
-The integration now implements channel and hotkey selection, buzzer and
-mouse channel-switching controls, auto-scan selection, the `W0` display
-action, and audio/video/hub routing selectors. It receives the listed state
-feedback into native entities and offers a generic command action. See
-the [README](../README.md) for installation, migration, and logging
-instructions. The old helpers and shell actions are not required by the
-integration.
+The original configuration establishes intended writes and legacy
+response-to-helper mappings. The captures from October 1, 2026 establish
+what the serial transport logged in one installation. Physical observations
+establish device effects only where stated. The earlier email transcript
+records the order of a status report. The debug captures add the exact bytes,
+read boundaries, and host log timestamps.
 
 ## Serial settings
 
-`shell_command.configure_serial` runs this command:
+The original `shell_command.configure_serial` sets 115200 baud, 8 data
+bits, no parity, and 1 stop bit. The example shows its flags with the
+installation-specific adapter path replaced.
 
 ```sh
-stty -F /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0 115200 cs8 -cstopb -parenb
+stty -F /dev/serial/by-id/your-adapter 115200 cs8 -cstopb -parenb
 ```
 
-The configured settings are:
-
-- Baudrate: 115200 (`115200`)
-- Data bits: 8 (`cs8`)
-- Parity: none (`-parenb`)
-- Stop bits: 1 (`-cstopb`)
-
-Every supplied sender writes to that same device path. It identifies the
-FTDI USB serial adapter in this installation; it is not a universal KVM
-device path or a default to hard-code into the integration.
+Every legacy sender uses the same adapter path as the serial sensor.
 
 The command does not explicitly set hardware/software flow control,
 raw/canonical mode, echo, or newline translation. Those effective terminal
@@ -91,25 +39,24 @@ also opens and configures the port.
 
 ### Supplied serial sensor configuration
 
-The existing setup uses the stock serial sensor with this configuration:
+The original setup uses the stock serial sensor with these settings:
 
 ```yaml
 - platform: serial
-  serial_port: /dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0
+  serial_port: /dev/serial/by-id/your-adapter
   baudrate: 115200
   bytesize: 8
   parity: N
   stopbits: 1
 ```
 
-There is no `value_template` and no explicit `xonxoff`, `rtscts`, or
-`dsrdtr` override. The current
-[Home Assistant serial sensor implementation](https://github.com/home-assistant/core/blob/dev/homeassistant/components/serial/sensor.py)
-defaults all three flow-control flags to false. It reads newline-delimited
-bytes, decodes them as UTF-8, and strips leading and trailing whitespace
-before exposing a sensor state. Thus the automation sees processed lines,
-not raw bytes or terminators. The installed Home Assistant version and
-raw captures would establish the exact historical behavior.
+The supplied configuration has no `value_template` or explicit
+`xonxoff`, `rtscts`, or `dsrdtr` override. The
+[Home Assistant 2024.12.5 serial sensor](https://github.com/home-assistant/core/blob/6974f61703261ae329b76bb2d8884fec573350cb/homeassistant/components/serial/sensor.py)
+defaults all three flow-control flags to false, reads through the newline,
+decodes UTF-8, and trims outer whitespace. With the supplied settings, the
+automation receives processed state strings. The installation's Home
+Assistant version would establish which implementation ran there.
 
 The ConnectPro integration configures the same 115200/8N1 settings and
 disabled flow control when it opens the port; no separate serial sensor or
@@ -143,7 +90,9 @@ the actual write passed to its serial transport as `b'K1P0\r\n'`.
 
 ## Command catalog
 
-All commands below append `\r\n` and target the device path above.
+These are the original `shell_command` senders. They append `\r\n` and
+write to the adapter path above. See the README for the integration's
+[manual command action](../README.md#sending-a-manual-command).
 
 ### Generic command
 
@@ -225,23 +174,22 @@ domain; for example, call `shell_command.serial_command_ch1` to write
 | `serial_command_u1` | `U1` |
 | `serial_command_u2` | `U2` |
 
-The request-channel script establishes `Ch1` through `Ch4` as channel
-selection commands. The dashboard labels `W0` as `Reset`; a later capture
-and physical observation below associate it with displays cycling off
-and on and the reply `Wake-Up : DP-ALL`. The targeted channel test below
-establishes effects for uppercase `K1P1` and `K2P1` in one two-KVM chain;
-it does not verify every lowercase sender above. A subsequent buzzer
-capture confirms `bzon` and `BZON` receiving `BZON`, and `BZOFF`
-receiving `BZOFF`. The lowercase `bzoff` sender remains untested in these
-captures. The hotkey and mouse capture below establishes command-associated
-feedback for `ctrl`, `shift`, `scroll`, `caps`, and both cases of `M0` /
-`M1`. The routing capture below establishes replies for lowercase `h1p2`,
-`h0p0`, `v1p2`, `v0p0`, and `v1p0`, and rejection of `h1p0`. Subsequent
-captures below establish lowercase `o1` / `o0` audio routing replies,
-`s0` through `s5` auto-scan settings, and `u0` / `u1` / `u2` UART
-board-selection replies. Uppercase `O`, `S`, and `U` payloads in the
-original inventory are not separately verified by these lowercase tests.
-Other command meanings remain unconfirmed on this hardware.
+The [request-channel script](#channel-buttons) assigns `Ch1` through
+`Ch4` to its channel buttons. Compare the configured case with the
+captured case before drawing conclusions about a command. For example, the
+audio, scan, and UART captures exercise lowercase `o`, `s`, and `u`
+commands. The catalog lists uppercase payloads for those legacy senders.
+
+## Captured exchanges
+
+| Topic | What the evidence covers |
+| --- | --- |
+| Status and model | [Uppercase status report](#debug-capture-after-k1p0), [lowercase status during scanning](#status-query-during-auto-scan), and [model identification](#model-identification) |
+| Linked KVMs | [Targeted channel changes](#targeted-channel-switching-in-a-two-kvm-chain) and [first/local status after switching](#local-status-after-targeted-channel-selection) |
+| Display reset | [Display cycling after `W0`](#debug-capture-after-w0) |
+| Buzzer, hotkeys, and mouse | [Buzzer replies](#debug-capture-after-buzzer-commands) and [hotkey and mouse settings](#debug-capture-after-hotkey-and-mouse-commands) |
+| Routing and scanning | [USB and video routing](#debug-capture-after-usb-hub-and-video-routing-commands) and [audio routing and scan](#debug-capture-after-audio-and-auto-scan-commands) |
+| UART | [Board-selection replies and `v3p0` rejection](#debug-capture-after-uart-board-selection-commands) |
 
 ### Report observed after `K1P0`
 
@@ -294,8 +242,8 @@ already accepted by the original automation without a helper update.
 
 The integration parses the seven entity-state lines and the confirmed
 model identifier, and logs every raw received byte at debug level. The DP
-component version line and `V1P0` / `V1P1` remain unrecognized; they do not interrupt the
-reader or clear previously observed state. The email text is also stored
+component version line and `V1P0` / `V1P1` remain unrecognized. The reader
+continues and retains previously observed state. The email text is also stored
 in [the regression fixture](../tests/fixtures/k1p0_report.txt).
 
 In the original sensor automation, the two component version lines and
@@ -882,6 +830,21 @@ through the status response, exact TX/RX logging, and no extra writes.
 The DP version line remains the sole unrecognized diagnostic, and the
 eight known firmware lines remain ignored.
 
+## Current integration behavior
+
+See the README for [available controls](../README.md#entities-and-actions),
+[entity state](../README.md#how-entity-state-updates), and
+[debug logging](../README.md#debugging-serial-communication). The serial
+client owns the port and exposes the recognized feedback received on that
+connection. Home Assistant reports one set of observed values for the
+connection, including when multiple KVMs are linked. A successful write
+establishes transport completion. Recognized feedback establishes entity
+state, and hardware observations establish physical effects.
+
+The channel select sends `Ch1` through `Ch4`. **Reset displays** sends
+`W0`. UART board selection remains a manual command, and its replies are
+logged as diagnostics.
+
 ### Routing configuration
 
 Audio, Video 1, Video 2, Hub 1, and Hub 2 are native configuration selects.
@@ -963,6 +926,9 @@ capture separately verifies its received status bytes.
 
 ## Dashboard and channel request behavior
 
+This section records the original YAML dashboard and script. The integration
+provides its own channel and display controls.
+
 ### Channel buttons
 
 All four supplied channel buttons call `script.kvm_request_channel` with
@@ -1007,6 +973,9 @@ integration calls this control **Reset displays**; the original dashboard
 label is not evidence of a factory reset or a KVM settings reset.
 
 ## Response formats
+
+The tables below map the legacy sensor's processed strings to helper
+updates. The integration parses feedback into native entities.
 
 ### Input processing
 
@@ -1123,139 +1092,65 @@ KVM's selected channel, followed by physical-button feedback. The possible
 side effects of `K1P0`, general acknowledgment rules, and the origin of
 each reply within a daisy chain remain unknown.
 
-## Current integration behavior
-
-The integration owns the port for both reading and writing. It applies the
-serial settings on connection, reconnects after connection failures, and
-parses the confirmed feedback into native entities. It does not assume
-that a successful write means the requested state has taken effect.
-Values remain unknown until feedback arrives after connection. The
-manual `K1P0` reports update the recognized state categories; the tested
-channel value is consistent with the first/local KVM. The integration now
-sends lowercase `k1p0` once after initialization on each runtime connection,
-including reconnects, using the user's confirmation above. Status lines
-populate entities through the same parser as unsolicited feedback.
-Downstream status retrieval remains unconfirmed, and there is no periodic
-status polling.
-
-The channel select sends `Ch1` through `Ch4`, and the Reset displays button
-sends `W0`. The button retains its existing `reset` entity key and unique
-ID; changing its display name does not create a replacement entity. Its
-`Wake-Up : DP-ALL` reply is debug logged without fabricating state.
-
-The Buzzer switch sends `BZON` or `BZOFF`; the Mouse channel switching
-switch sends `M1` or `M0`. The Hotkey selector sends `ctrl`, `shift`,
-`scroll`, or `caps` for `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock`.
-Each control sends every valid request, including requests matching the
-last observed state. Their states remain unknown until feedback arrives
-and change only from recognized feedback. They do not track separate
-state for linked KVMs. Converted settings have no compatibility sensors;
-the binary sensor platform and the earlier hotkey sensor are removed.
-
-Audio, both video outputs, and both hubs have configuration dropdowns for
-Sync or Channel 1–4. Audio/video Sync selections send their independent
-commands. Per-hub Sync requests are rejected without writing and direct
-the user to **Sync both USB hubs** (`h0p0`). The earlier routing sensors
-and audio/video Sync buttons are removed, including their obsolete registry
-entries. Each routing control reports received state; there are no
-compatibility sensors. See [routing configuration](#routing-configuration)
-for command mappings and the distinction between direct captures and
-command-family extensions.
-
-The latest lowercase status report provides both video outputs in Sync;
-older bare video tokens remain unknown. Global video Sync updates both
-outputs together, while individual video replies update only their own
-output. That global command remains available through the manual action.
-
-The Auto scan selector sends `s0` through `s5` for Off or one of the five
-reported durations. Every duration selection starts scanning. Only
-explicit scan and interval replies establish its state; channel changes
-do not establish that scanning stopped. UART board-selection replies,
-version text, `Ready-0`, and command errors remain diagnostics through
-normal debug logging. The integration does not create UART controls or
-automatically select a board.
-
-Every valid channel selection sends a command, including a selection
-that matches the last observed channel. Unlike the old script's guard,
-this allows a quick change and change back before the first response
-arrives. Additional audio/hub/video combinations follow their command
-families and remain candidates for further hardware verification. The
-`connectpro.send_command` action accepts a ConnectPro
-`device_id` and a single printable ASCII command line under `data`, and
-appends CRLF. This
-provides a way to use known commands while collecting evidence for
-additional features.
-
-The targeted channel commands can selectively switch linked units through
-the manual action, but their observed replies do not update the Channel
-entity. A subsequent manual `K1P0` can supply recognized channel feedback,
-as the later capture demonstrates. The current entities describe feedback
-on one serial connection; they do not track each unit in a chain separately.
-
-Debug logging records the device path, `TX`/`RX` direction, and escaped
-bytes, including line endings. Unrecognized incoming messages are logged
-without changing known state. These logs can correlate a sent command
-with subsequent feedback, including messages that the original automation
-did not recognize. See the
-[debugging instructions](../README.md#debugging-serial-communication).
-
 ## Details needed from the existing setup
 
-To complete the reference, collect:
+The original configuration leaves three questions for anyone reconstructing
+it or interpreting its command inventory:
 
-- Confirmation that the supplied request-channel script has entity ID
-  `script.kvm_request_channel`.
-- Other scripts, automations, or dashboard controls that call the listed
-  senders or react to changes in the seven helpers above. These can
-  establish the remaining command meanings, status queries, and any
-  additional feedback-loop guards. The shell command definitions and
-  channel/Reset dashboard actions are already recorded here.
-- The helper definitions, especially the complete option lists for
-  `input_select.kvm_audio`, `input_select.kvm_hub1`, and
-  `input_select.kvm_hub2`.
-- The scope of `W0` across displays and linked KVMs in other topologies,
-  and whether computers actually redetect displays after the observed
-  off/on cycle. Its `Wake-Up : DP-ALL` reply and the display cycle in this
-  installation are now recorded; KVM settings changes are not established.
-- Any side effects of `K1P0` beyond returning the observed status report.
-  The `K1P1` and `K2P1` channel-selection effects are observed in this
-  installation, but other ports/levels and lowercase equivalence of those
-  selection commands still need confirmation. The user has confirmed
-  lowercase `k1p0` for current-state initialization.
-- Whether another command can retrieve downstream status, how those
-  responses return to the host, and which unit produced the `K2P0` error.
-- Isolated before/after verification of buzzer control on each linked KVM
-  and other chain topologies. The user heard the buzzer and reported that
-  commands appear to affect both units; the reply origin and general
-  chain scope remain unconfirmed. Lowercase `bzoff` is untested.
-- The mouse gesture used for channel switching and behavior in other
-  chain topologies. The user has verified hotkey and mouse settings in
-  use on both linked KVMs; the source of each serial reply remains unknown.
-- A serial `Ch1` comparison with linked units initially on different
-  channels, to establish its synchronized-switching scope separately from
-  physical button behavior. Per-unit state feedback and response origins
-  are also needed before adding separate entities for linked units.
-- Before/after state observations and repeated captures with the chain
-  topology identified, or a comparison with an isolated device, to establish
-  command effects and the origin of responses. The existing `K1P0` debug
-  capture already preserves bytes, timing, and read boundaries for one
-  exchange. The targeted channel capture adds physical observations for
-  two commands; it does not establish the effects of every listed sender.
-- Additional hub/video destination channels and Hub 2/Video 2 fixed
-  routing, including their exact replies. Hub 1 and Video 1 routing to
-  machine 2, both-hub Sync, and individual/global video Sync are recorded
-  above. Whether an independent hub Sync command exists remains open;
-  `h1p0` is rejected in this installation.
-- Audio destinations beyond the directly tested Channel 1, additional
-  video status modes, and model indicators for other KVMs and firmware versions to
-  identify the scope of the observed behavior. `UDP2_14AP_U3` now identifies
-  `UDP2-14AP`. Bare `V1P0` / `V1P1` report tokens do not yet provide
-  video state.
-- The effect of UART board selection on later commands and its scope
-  across the chain. `u0` / `u1` / `u2` replies and `Ready-0` diagnostics
-  are recorded, but board labels and reply timing do not establish chain
-  addresses or a required initialization/recovery sequence.
-- Scan behavior after manual channel selection, actual dwell times for
-  the other four intervals, and whether scan settings appear in a status
-  report. The user verified scan operation on both linked KVMs; only the
-  5-second channel cycle is captured here.
+- Is the request-channel script registered as `script.kvm_request_channel`?
+- What other scripts, automations, or dashboard controls call these
+  senders or react to the seven helper states? Those references could
+  explain additional commands, status queries, or feedback-loop guards.
+- What options were configured for the audio and USB hub helpers, and how
+  were the other helper entities defined?
+
+## Hardware verification gaps
+
+The integration implements the controls described in the README. The
+captures here cover specific exchanges and physical observations. To
+establish broader behavior, identify the device model, firmware, and chain
+topology. Record before-and-after state and repeat the exchange, checking an
+isolated device where that would help identify the unit that replied.
+
+### Startup, channels, and linked units
+
+- Verify automatic startup, recovery after a physical disconnect, and the
+  native `Ch1` through `Ch4` controls on hardware. In a chain, compare a
+  serial `Ch1` command with physical-button behavior from initially
+  different channel states.
+- Determine whether `K1P0` changes settings beyond returning a status
+  report. Check the other targeted channel commands and lowercase
+  equivalents. The tested uppercase `K1P1` and `K2P1` switched the first
+  and second KVMs respectively.
+- Establish how to retrieve downstream status, which unit returned the
+  `K2P0` error, and which unit produced each response. Separate entities
+  for linked units would require feedback that identifies each unit's
+  state.
+
+### Routing, scan, and UART
+
+- Capture exact replies for more hub and video destinations, including
+  fixed routing on Hub 2 and Video 2, and audio destinations beyond
+  Channel 1. An independent hub Sync command remains unconfirmed.
+- Capture additional video status modes and model indicators for other
+  KVMs and firmware. The known U3 identifier maps to **UDP2-14AP**. Bare
+  `V1P0` and `V1P1` status tokens have unknown meaning.
+- Verify what happens to scanning after manual channel selection and the
+  actual dwell times beyond the captured 5-second cycle. Check whether a
+  status report ever includes scan settings.
+- Determine how UART board selection affects later commands and which
+  units it affects. The board labels and `Ready-0` timing leave chain
+  addresses and initialization or recovery behavior unconfirmed.
+
+### Display and input settings
+
+- Check which displays and linked KVMs `W0` affects in other topologies,
+  whether host computers redetect displays, and whether KVM settings change.
+- Verify buzzer control independently on each linked KVM and in other
+  topologies. The installation's buzzer was audible and appeared to change
+  on both units. The origin of the replies and lowercase `bzoff` behavior
+  are still open.
+- Record the mouse gesture for changing channels and test the hotkey and
+  mouse settings in other topologies. Both settings were verified on the
+  two linked KVMs in the recorded installation. The source of each serial
+  reply remains unknown.

@@ -64,10 +64,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         if device is None:
             raise ServiceValidationError("The selected KVM device does not exist")
 
+        # Newer device registries assign each device a single config entry.
+        entry_ids = (
+            (device.config_entry_id,)
+            if hasattr(device, "config_entry_id")
+            else device.config_entries
+        )
         entries = [
             entry
-            for entry_id in device.config_entries
-            if (entry := hass.config_entries.async_get_entry(entry_id)) is not None
+            for entry_id in entry_ids
+            if entry_id is not None
+            and (entry := hass.config_entries.async_get_entry(entry_id)) is not None
             and entry.domain == DOMAIN
         ]
         if len(entries) != 1:
@@ -136,9 +143,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConnectProConfigEntry) -
             if not isinstance(model, str) or not model:
                 return
             registry = dr.async_get(hass)
-            device = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
-            if device is not None and device.model != model:
-                registry.async_update_device(device.id, model=model)
+            for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+                if (DOMAIN, entry.entry_id) in device.identifiers:
+                    if device.model != model:
+                        registry.async_update_device(device.id, model=model)
+                    break
 
         unsubscribe_metadata = client.add_listener(async_update_device_metadata)
         entry.async_on_unload(unsubscribe_metadata)

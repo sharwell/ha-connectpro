@@ -1,28 +1,24 @@
 # ConnectPro KVM (Home Assistant)
 
-This custom Home Assistant integration controls a ConnectPro KVM over its
-serial connection and reads device feedback into native entities. It
-configures the port when it connects, so a startup `stty` automation is no
-longer needed.
+Control a serial-connected ConnectPro KVM from Home Assistant. The
+integration provides native controls for channel selection, display reset,
+hotkeys, audio/video/USB routing, auto-scan, the buzzer, and mouse channel
+switching. It configures the serial port and updates entity state from
+device feedback.
 
-This is an initial implementation based on the existing installation's
-commands and response mappings. User-provided captures from physical
-hardware confirm manual status, targeted channel, hotkey, buzzer, mouse
-channel-switching, USB/video/audio routing, auto-scan, and `W0` exchanges
-through the integration. The user observed `W0` cycling all displays off
-and on. The native `Ch1` through `Ch4` controls, recovery, and other
-hardware configurations still need hardware verification. The
-[protocol reference](docs/commands.md) records the evidence and the
-features that still need confirmation.
+The integration represents one device per serial connection. For linked
+KVMs, its entities report feedback on that connection. The hardware
+observations come from one installation. See the [command reference](docs/commands.md)
+and its [hardware verification gaps](docs/commands.md#hardware-verification-gaps).
 
 ## HACS installation (custom repo)
 
 Requires Home Assistant **2024.12.0 or newer**.
 
 1. In HACS, add this repository as a custom integration.
-2. Install "ConnectPro KVM".
+2. Install **ConnectPro KVM**.
 3. Restart Home Assistant.
-4. Follow the setup instructions below.
+4. Follow the [setup instructions](#setup).
 
 For a manual installation, copy `custom_components/connectpro` into your
 Home Assistant configuration's `custom_components` directory, then restart
@@ -39,107 +35,88 @@ adding ConnectPro KVM:
    `Process serial sensor inputs`.
 3. Stop calling the old serial `shell_command` actions, including the
    channel script and dashboard buttons that use them.
-4. Add this integration, then update dashboards and automations to use its
-   entities and actions.
+4. [Set up ConnectPro KVM](#setup), then update dashboards and automations
+   to use its entities and actions.
 
-The integration creates native entities; it does not take over the old
-`sensor.serial_sensor`, `input_select.kvm_*`, or `input_boolean.kvm_*`
-helpers. Keep the old definitions while migrating if useful, then remove
-them when nothing references them.
+The integration creates its own entities. You can remove
+`sensor.serial_sensor`, `input_select.kvm_*`, and `input_boolean.kvm_*`
+once nothing references them.
+
+### Updating from an earlier prerelease
+
+Update dashboards and automations that used the earlier routing sensors or
+audio/video Sync buttons to use the [routing selects](#entities-and-actions).
+Setup removes the obsolete routing entries for this integration. The
+hotkey, buzzer, and mouse channel switching controls also report their
+observed state. The renamed **Reset displays** button retains its entity
+identity.
 
 ## Setup
 
 1. Go to **Settings > Devices & services > Add integration** and choose
    **ConnectPro KVM**.
-2. Choose an available serial port or enter a custom device path,
-   preferably your adapter's stable `/dev/serial/by-id/...` path.
+2. Choose an available serial port or enter your adapter's device path.
+   On Linux, prefer its stable path under `/dev/serial/by-id/`.
 3. Optionally enter a name for the device.
 
-Use your own adapter path; the path in the protocol reference belongs to
-one installation. Home Assistant must have permission to open the device.
-Container installations must also make the serial device available inside
-the container.
+Home Assistant needs permission to open the device. For a container
+installation, make the serial device available inside the container.
 
-New entries use **115200 baud, 8 data bits, no parity, and 1 stop bit**.
-Software and hardware flow control are disabled. The integration applies
-these settings each time it opens the port, including after a reconnect.
-Serial settings stored by older config entries remain supported.
+New entries use **115200 baud, 8 data bits, no parity, and 1 stop bit**,
+with software and hardware flow control disabled. The integration reapplies
+these settings each time it opens the port, including after reconnecting.
+Older entries keep their stored serial settings.
 
-Setup checks that the port can be opened and the settings applied. It does
-not identify the connected hardware or require a KVM handshake. Once the
-entry's entities are initialized, the integration sends `k1p0` to obtain
-their current state. Serial-port checks in the setup form do not send KVM
-commands. To change the port or name later, use **Reconfigure** on the
-integration entry; its existing entities are preserved.
-
-When a status report contains the confirmed `UDP2_14AP_U3` identifier,
-the integration sets **UDP2-14AP** as the model in Home Assistant's device
-information. It updates the existing device after the reply arrives and
-retains the identified model through disconnects. Other model identifiers
-remain unmapped; component version strings are not used as device firmware
-versions. See [model identification](docs/commands.md#model-identification).
+The setup form checks whether the port can be opened with those settings
+without sending KVM commands. Use **Reconfigure** on the integration entry
+to change the port or name while keeping its entities.
 
 ## Entities and actions
 
-| Entity | Behavior |
+Use the controls on the integration's device page.
+
+| Entity | Options and effects |
 | --- | --- |
-| Channel select | Sends `Ch1` through `Ch4`; reports `Channel 1` through `Channel 4` from received feedback. |
-| Reset displays button | Sends `W0`, matching the previous dashboard's Reset action. The user observed all displays cycling off and on; the captured reply is `Wake-Up : DP-ALL`. |
-| Hotkey select | Selects `Ctrl`, `Shift`, `Scroll Lock`, or `Caps Lock` using `ctrl`, `shift`, `scroll`, or `caps`; reports recognized feedback. |
-| Audio routing select | Selects `Sync` or `Channel 1` through `Channel 4` using `o0` through `o4`. |
-| Video 1 and Video 2 routing selects | Select `Sync` or `Channel 1` through `Channel 4` using `v1p0`–`v1p4` or `v2p0`–`v2p4`. |
-| Hub 1 and Hub 2 routing selects | Select `Channel 1` through `Channel 4` using `h1p1`–`h1p4` or `h2p1`–`h2p4`; display reported `Sync` but reject selecting it individually. |
-| Sync both USB hubs button | Sends `h0p0`, restoring both hubs to Sync together. |
-| Auto scan select | Selects `Off`, `5 seconds`, `8 seconds`, `15 seconds`, `20 seconds`, or `30 seconds` using `s0` through `s5`. Choosing a duration starts scanning. |
-| Buzzer switch | Sends `BZON` or `BZOFF`; reports the received on/off state. |
-| Mouse channel switching switch | Sends `M1` to enable or `M0` to disable mouse channel switching; reports the received on/off state. |
+| Channel select | Select **Channel 1** through **Channel 4**. |
+| Reset displays button | Sends `W0`. All displays cycled off and on in the [observed exchange](docs/commands.md#debug-capture-after-w0). Computer-side redetection remains unverified. |
+| Hotkey select | Select **Ctrl**, **Shift**, **Scroll Lock**, or **Caps Lock**. |
+| Audio routing select | Choose **Sync** to follow the selected channel or **Channel 1** through **Channel 4** to route audio independently. |
+| Video 1 and Video 2 routing selects | Choose **Sync** or **Channel 1** through **Channel 4** independently for each output. |
+| Hub 1 and Hub 2 routing selects | Choose **Channel 1** through **Channel 4** independently. A hub can display **Sync** from feedback, but selecting it raises an error, including in automations. Use **Sync both USB hubs**. |
+| Sync both USB hubs button | Returns both hubs to **Sync** together. |
+| Auto scan select | Choose **5**, **8**, **15**, **20**, or **30 seconds** to start scanning. Choose **Off** to stop. |
+| Buzzer and Mouse channel switching switches | Turn each setting on or off. |
 
-Each routing dropdown is a configuration entity and reports its observed
-setting. Audio and video accept Sync directly. Hub Sync is a reported
-state, but choosing it raises an error directing you to **Sync both USB
-hubs**, because independent hub Sync is not established. Home Assistant
-does not support graying out one dropdown option, so Sync remains visible
-and is blocked when requested, including through automations.
+### How entity state updates
 
-State remains unknown until relevant feedback arrives; sending a command
-does not establish that it succeeded. Routing controls replace the earlier
-routing sensors and audio/video Sync buttons. Those obsolete entity entries
-are removed on setup during this prerelease development; there are no
-compatibility copies. Existing dashboards and automations should use the
-new selects. Hotkey, buzzer, and mouse channel switching also each have
-one control that reports state.
+Each valid selection or switch request sends its command, even when the last
+reported value matches. You can switch to Channel 3 and back to Channel 2
+before the first reply arrives. Entity state changes when the integration
+receives recognized feedback.
 
-Repeated captures show `K1P0` producing a report
-containing the seven original state categories. After `K1P1`, this report
-contains `CH-1`, consistent with the first/local KVM's channel. Possible
-effects on other settings remain unconfirmed. Observations also confirm
-that `K1P1` switches only the first KVM to channel 1 and `K2P1`
-switches only the second in the user's two-device chain. These commands
-are available through the manual command action; the integration creates
-one device per serial connection, without separate channel entities for
-linked units. The integration sends lowercase `k1p0` once when its reader
-starts on a connection, and once after each successful reconnect. Received
-status lines populate recognized settings and model metadata as they arrive;
-the latest report also supplies explicit Video 1 and Video 2 routing. There is
-no periodic polling or optimistic state update. Entities become unavailable
-on a connection failure, and the integration retries automatically before
-requesting fresh state. The user has confirmed `k1p0` can obtain current
-entity state after initialization; the
-[protocol reference](docs/commands.md#automatic-state-initialization)
-records this separately from the earlier uppercase captures.
+On startup after the entities initialize, and after each successful
+reconnect, the integration sends `k1p0` once to request current state.
+There is no periodic polling. Entities become unavailable on connection
+failure. The integration retries automatically, and individual settings
+stay unknown on the new connection until matching feedback arrives. The
+status reports observed so far include no auto-scan settings. The Auto scan
+select needs explicit off feedback or both on feedback and a known interval.
+While scanning, it keeps showing the last reported duration until a new
+interval arrives. A channel change alone does not establish that scanning
+stopped.
 
-Each channel selection sends the requested command, even when the last
-reported channel matches. This keeps rapid requests, such as switching to
-Channel 3 and back to Channel 2 before feedback arrives, from being lost.
-The other selectors and switches also send every valid request, including
-requests matching the last reported state, and wait for feedback before
-changing state.
+If the reply includes the confirmed `UDP2_14AP_U3` identifier, Home
+Assistant displays **UDP2-14AP** as the device model. The model persists
+through disconnects. Other model identifiers remain unmapped, and component
+version numbers remain protocol diagnostics. See the
+[status query](docs/commands.md#automatic-state-initialization) and
+[model identification](docs/commands.md#model-identification) details.
 
-Use the entities on the integration's device page to select a channel or
-hotkey, control the buzzer or mouse channel switching, reset displays,
-restore USB/video/audio routing to Sync, or configure auto-scan. In an
-automation, replace the example entity IDs below with the ones created in
-your installation:
+### Using controls in automations
+
+Replace the entity IDs with those created in your installation. Use
+`select.select_option` for channels, hotkeys, routing, and auto-scan.
+Quote `"Off"` when writing that auto-scan option in YAML.
 
 ```yaml
 action: select.select_option
@@ -149,31 +126,9 @@ data:
   option: Channel 2
 ```
 
-```yaml
-action: button.press
-target:
-  entity_id: button.your_kvm_reset
-```
-
-```yaml
-action: switch.turn_off
-target:
-  entity_id: switch.your_kvm_buzzer
-```
-
-```yaml
-action: select.select_option
-target:
-  entity_id: select.your_kvm_hotkey
-data:
-  option: Scroll Lock
-```
-
-```yaml
-action: switch.turn_on
-target:
-  entity_id: switch.your_kvm_mouse_channel_switching
-```
+Use `button.press` for **Reset displays** or **Sync both USB hubs**. Use
+`switch.turn_on` or `switch.turn_off` for the buzzer and mouse channel
+switching.
 
 ```yaml
 action: button.press
@@ -182,24 +137,18 @@ target:
 ```
 
 ```yaml
-action: select.select_option
+action: switch.turn_off
 target:
-  entity_id: select.your_kvm_video_1_routing
-data:
-  option: Sync
+  entity_id: switch.your_kvm_buzzer
 ```
 
-```yaml
-action: select.select_option
-target:
-  entity_id: select.your_kvm_auto_scan
-data:
-  option: "Off"
-```
+### Sending a manual command
 
-For a command already known to work with your device, use the
-**ConnectPro KVM: Send command** action. Select the ConnectPro device in the
-action editor. The YAML form uses its device ID inside `data`:
+For a command known to work with your hardware, use **ConnectPro KVM: Send
+command** (`connectpro.send_command`). Select the ConnectPro device in the
+action editor. In YAML, provide its device registry ID in `data.device_id`
+and a single nonblank printable ASCII line in `data.command`. Preserve
+command case and omit line endings. The integration appends `\r\n`.
 
 ```yaml
 action: connectpro.send_command
@@ -208,138 +157,49 @@ data:
   command: Ch2
 ```
 
-The command must be one printable ASCII line. Preserve its case and omit line
-endings; the integration adds `\r\n`. This action sends bytes without
-claiming a device acknowledgment. The [command catalog](docs/commands.md#command-catalog)
-includes legacy senders whose meanings are still unconfirmed.
-
-The Channel entity retains the last recognized `CH1` / `CH-1` through
-`CH4` / `CH-4` report received on the connection. In the
-[targeted channel capture](docs/commands.md#targeted-channel-switching-in-a-two-kvm-chain),
-`K1P1` returned `OK` and `K2P1` returned `K1P1`, without a channel report.
-After these manual commands, the entity can retain an earlier value while
-the linked KVMs are on different channels. Neither reply identifies their
-individual channel states.
-
-A later [manual status capture](docs/commands.md#local-status-after-targeted-channel-selection)
-shows `K1P0` updating the Channel entity to `Channel 1`, followed by a
-physical channel-2 button press updating it to `Channel 2`. This does not
-provide separate state for linked units. A separate captured `K2P0`
-attempt returned `ERROR`, so that command did not retrieve the second
-KVM's status in this installation.
-
-The [captured `W0` exchange](docs/commands.md#debug-capture-after-w0)
-returned `Wake-Up : DP-ALL`. The user observed all displays cycling off
-and on; computer-side redetection has not been verified. The button is
-named **Reset displays** to describe this effect. Its existing unique ID
-is preserved, and it still sends exactly `W0`. This reply does not update
-the integration's observed state. Later `CH1` / `CH2` messages in the log
-were unrelated channel feedback, as confirmed by the user.
-
-The [buzzer capture](docs/commands.md#debug-capture-after-buzzer-commands)
-shows both `bzon` and `BZON` receiving `BZON`, and `BZOFF` receiving
-`BZOFF`. The native switch uses the tested uppercase commands. These
-responses update its state; it does not assume that a write succeeded.
-The user heard the buzzer and reported that the commands appear to affect
-both linked KVMs. The integration reports the feedback received on the
-connection rather than separate buzzer states for each unit.
-
-The [hotkey and mouse capture](docs/commands.md#debug-capture-after-hotkey-and-mouse-commands)
-shows the four lowercase hotkey commands reporting their selected modes.
-Both lowercase and uppercase `m0` / `M0` report mouse channel switching
-off; `m1` / `M1` report it on. The controls use the tested lowercase
-hotkey commands and uppercase mouse commands. These settings are reported
-for one serial connection. The user verified the selected hotkeys and
-mouse channel switching in use and confirmed that the changes affect
-both linked KVMs in this installation.
-
-The [USB/video routing capture](docs/commands.md#debug-capture-after-usb-hub-and-video-routing-commands)
-shows `h1p2` assigning Hub 1 to machine 2 independently of the selected
-channel, and `h0p0` reporting both hubs in Sync. The user verified the fixed
-Hub 1 assignment on both linked KVMs. `h1p0` returned `ERROR`; the **Sync
-both USB hubs** button therefore sends `h0p0` and explicitly affects both
-hubs. An independent hub Sync command remains unknown.
-
-For video, `v1p2` reports Video 1 fixed to port 2, `v1p0` reports Video 1
-in Sync, and `v0p0` reports all video in Sync. The user verified that
-`v1p2` pins Video 1 to machine 2 on both KVMs and `v1p0` restores only
-Video 1 while leaving another pinned output unchanged. The routing selects
-extend the command families to all four channels and both reported hub/video
-endpoints. Those sibling combinations follow the supplied command inventory
-and observed reply structures; they have not each been tested on hardware.
-The global video command `v0p0` remains available through the manual action,
-and its reply sets both Video 1 and Video 2 routing to Sync.
-
-The [latest lowercase status capture](docs/commands.md#status-query-during-auto-scan)
-reports `Video1 : SYNC-mode` and `Video2 : SYNC-mode`. These now initialize
-both video routing controls when present in a status reply. The bare `V1P0`
-/ `V1P1` tokens in older reports remain unknown and do not establish video
-state. Routing selections continue to wait for device feedback.
-
-The [audio and scan capture](docs/commands.md#debug-capture-after-audio-and-auto-scan-commands)
-shows `o1` reporting audio routed to Channel 1 and `o0` reporting Sync.
-The Audio routing select recognizes the same feedback forms and sends
-`o0` for Sync or `o1` through `o4` for fixed channels. Destinations beyond
-the directly tested Channel 1 follow the command pattern. The user
-verified audio from machine 1 with `o1`, audio following the selected
-channel with `o0`, and both audio routing and auto-scan affecting both
-linked KVMs.
-
-**Auto scan** combines stopping and choosing a scan interval in one
-selector. Selecting a duration sends `s1` through `s5` and starts
-automatic channel changes; selecting `Off` sends `s0`. The five durations
-come from the device's interval replies. Only the 5-second scan has a
-captured sequence of channel changes, and the user reported it disrupting
-inputs while the monitors adjusted. A physical channel-button press does
-not provide an explicit scan-off reply; the selector therefore waits for
-`Auto Scan : OFF` to report `Off`.
-
-The selector remains unknown until it receives either an explicit OFF
-reply or both ON and a recognized interval. While scanning is on, it shows
-the last reported interval; during a change, a new ON reply can arrive
-before the new interval. The captured `k1p0` reports do not include scan
-settings, so startup does not assume scanning is off.
-
-The [UART board-selection capture](docs/commands.md#debug-capture-after-uart-board-selection-commands)
-records `u1` reporting `UART to DP1-Board`, `u2` reporting
-`UART to DP2-Board`, and `u0` reporting a return to `USB-Board` with later
-diagnostics. These are available through the manual command action. Their
-effect on later commands and scope in the daisy chain remain unconfirmed;
-they are not exposed as routine controls or sent automatically. The
-same capture records `v3p0` returning `ERROR`.
+The action rejects invalid input or a non-ConnectPro device and reports an
+error if the connection cannot send. A successful write means the command
+was accepted by the serial transport. Entity state still depends on
+recognized feedback. In a tested two-KVM chain, `K1P1` and `K2P1` switched
+different units without updating the Channel entity. See the
+[targeted channel evidence](docs/commands.md#targeted-channel-switching-in-a-two-kvm-chain)
+and [command catalog](docs/commands.md#command-catalog) for observed
+replies and legacy commands.
 
 ## Debugging serial communication
 
 ### Dependency errors after a Home Assistant update
 
+If setup reports `Requirements for connectpro not found` and the
+installation log shows an old `serialx==1.10.0` pin, update ConnectPro and
+restart Home Assistant. For a manual installation, replace
+`custom_components/connectpro` in your Home Assistant configuration
+directory. The update uses your existing device settings and entities.
+
 Home Assistant 2026.10.2
-[requires `serialx==1.11.0`](https://github.com/home-assistant/core/blob/2026.10.2/homeassistant/package_constraints.txt).
-Older ConnectPro
-versions pinned `serialx==1.10.0`, preventing setup after the update because
-Home Assistant cannot install both versions. ConnectPro now accepts
-`serialx>=1.10.0,<2.0.0`, allowing Home Assistant to keep its compatible
-version. The upper bound reserves a new major release for compatibility
-review.
+[requires `serialx==1.11.0`](https://github.com/home-assistant/core/blob/8d7fd8b68677c2585be36ec86043308f403875b8/homeassistant/package_constraints.txt#L68).
+Older ConnectPro releases require exactly 1.10.0. The current
+`serialx>=1.10.0,<2.0.0` range lets Home Assistant keep its compatible
+version and reserves a new major release for compatibility review.
 
-If the log reports `Requirements for connectpro not found` with the old
-pin, install the corrected integration files and restart Home Assistant.
-For a manual installation, replace `custom_components/connectpro` in your
-Home Assistant configuration directory with this repository's copy. Saved
-device settings and entities do not need to be removed or recreated.
-
-This failure happens before the integration loads, so enabling its debug
-logging cannot fix it. If requirements still fail with the updated files,
-check the preceding package-installation log for the specific cause.
+A requirement failure occurs before ConnectPro loads. If setup still
+fails after the update, check the preceding package-installation log
+for the cause.
 
 ### Communication logs
 
-Open **Settings > Devices & services > ConnectPro KVM**, open the three-dot
-menu, and choose **Enable debug logging**. Reproduce the issue, then choose
-**Disable debug logging** to download the log, following
-[Home Assistant's debug logging instructions](https://www.home-assistant.io/docs/configuration/troubleshooting/#enabling-debug-logging).
+1. Open **Settings > Devices & services > ConnectPro KVM**.
+2. In the three-dot menu, choose **Enable debug logging**.
+3. Reproduce the issue. To collect protocol evidence, capture startup and
+   then one action at a time. Note the KVM model, firmware version, and
+   observed result.
+4. Choose **Disable debug logging** to download the log. Before sharing it,
+   redact device paths and other installation identifiers. Keep the command
+   and reply bytes, read order, and relevant timing.
 
-Alternatively, add or merge this into `configuration.yaml` and restart
-Home Assistant:
+See [Home Assistant's debug logging instructions](https://www.home-assistant.io/docs/configuration/troubleshooting/#enabling-debug-logging).
+You can also add or merge the following into `configuration.yaml` and
+restart Home Assistant. Remove the setting when finished.
 
 ```yaml
 logger:
@@ -347,42 +207,17 @@ logger:
     custom_components.connectpro: debug
 ```
 
-Debug logs include the serial device path, the direction (`TX` for sent
-bytes and `RX` for received bytes), and escaped byte content so that line
-endings are visible. Unrecognized incoming messages are logged as well.
-A sent `Ch2` command is shown with its `\r\n` terminator; incoming data may
-arrive in more than one read. Logs describe what the integration writes
-and receives, not an independent electrical capture.
-
-The [captured `K1P0` exchange](docs/commands.md#debug-capture-after-k1p0)
-illustrates fragmented reads and trailing whitespace. The component version
-line beginning `UDP2_14AP_U3` now identifies the device model. The DP
-component version line and `V1P0` / `V1P1` remain unrecognized diagnostics;
-this does not stop processing state feedback.
-
-For useful protocol evidence, capture a connection/startup followed by one
-action at a time, and note the KVM model, firmware version, and observed
-result. This will help establish additional commands and feedback forms.
-Turn debug logging off when finished.
+The log records the device path, the `TX` or `RX` direction, and escaped
+bytes such as the `\r\n` terminator of `Ch2`. A reply may span multiple
+reads. Unrecognized messages appear in the log while state processing
+continues. These are host-side logs of serial I/O. The
+[`K1P0` capture](docs/commands.md#debug-capture-after-k1p0) shows how to read
+fragmented replies and trailing whitespace.
 
 ## Development notes
 
-The serial protocol reference and remaining information gaps are in
-[docs/commands.md](docs/commands.md). The transport uses
-`serialx>=1.10.0,<2.0.0`. Keep this range in sync between the manifest and
-`requirements-test.txt`; an exact pin can conflict with Home Assistant's
-own package constraints during an upgrade.
-
-Tests use Home Assistant 2024.12.5 and simulated serial communication;
-they do not replace hardware verification. CI runs against serialx 1.10.0,
-1.11.0 (the version required by Home Assistant 2026.10.2), and the latest
-matching 1.x release. Dependency-loading regression tests also verify that
-Home Assistant accepts an already-installed compatible version without
-attempting to replace it. These library checks do not constitute a full
-test against Home Assistant 2026.10.2.
-
-Create a virtual environment and run the checks from the repository root
-(PowerShell):
+From the repository root, use Python 3.12 to create a virtual environment
+and run the checks. On Windows, run these commands in PowerShell.
 
 ```powershell
 python -m venv .venv
@@ -394,6 +229,24 @@ python -m venv .venv
 
 On Linux or macOS, use `.venv/bin/python` in place of
 `.\.venv\Scripts\python` after creating the environment.
+
+Local development uses the same baseline as the minimum CI job. The
+[Tests workflow](.github/workflows/tests.yml) runs the full simulated suite
+on two environments:
+
+| Job | Home Assistant | Python and serialx |
+| --- | --- | --- |
+| Minimum | The declared support floor, 2024.12.0 | Python 3.12 and ConnectPro's `serialx==1.10.0` floor |
+| Recent | A pinned stable release | The selected release's `.python-version` and package constraints |
+
+CI verifies the installed versions before pytest. The dependency-loading
+tests verify that Home Assistant keeps an installed compatible version.
+See the [command reference](docs/commands.md) for physical verification.
+
+Keep `serialx>=1.10.0,<2.0.0` in sync between the integration manifest and
+`requirements-test-common.txt`. Exact pins in test environments exercise
+specific combinations. The integration's range lets Home Assistant keep
+its own compatible version during an upgrade.
 
 ### Local Codex initialization prompt
 

@@ -2,7 +2,7 @@
   "source": "User-provided Home Assistant ConnectPro debug log",
   "timestamp_date": "2026-10-01",
   "timezone": null,
-  "device": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0KK0CL-if00-port0",
+  "device": "/dev/test-kvm",
   "capture_notes": "The first captured lowercase k1p0 exchange. Exact raw bytes and read boundaries are preserved, including separate reads with the same timestamp and CR/LF split across reads.",
   "original_diagnostics": "The original log classified the DP version line and Video2 : SYNC-mode as unrecognized and the eight K50 firmware lines as ignored. These diagnostic records are separate from the raw events.",
   "current_interpretation": "The parser now recognizes Video2 : SYNC-mode. The nineteen-line status report provides explicit Video1 and Video2 Sync replies, in place of the earlier captures' bare V1P0/V1P1 tokens, and contains no auto-scan on/off or interval reply.",
