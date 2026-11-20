@@ -76,14 +76,16 @@ its limits.
 
 - Use the virtual environment and commands in
   [README.md's Development notes](README.md#development-notes) from the
-  repository root. `pyproject.toml`, `requirements-test.txt`, and
+  repository root. `pyproject.toml`, `requirements-test*.txt`, and
   `.github/workflows/tests.yml` define the tooling and CI matrix. Keep the
-  manifest and test requirements aligned on the supported `serialx` range.
+  manifest and shared test requirements aligned on the supported `serialx`
+  range.
 - Keep the existing package manager, lockfiles if present, and integrity
   checks. Pin new tools, SDKs, components, and build assets when their first
   consumer needs them. Avoid moving tags, unpinned downloads, and unrelated
-  upgrades. Preserve the intentional `serialx` compatibility range and
-  floating 1.x CI lane to cover Home Assistant's dependency constraints.
+  upgrades. Preserve the intentional `serialx` compatibility range. CI
+  tests the declared support floor and a pinned recent Home Assistant
+  release using that release's Python version and package constraints.
 - Use configured formatters on affected supported files. Review the diff
   before applicable checks and repeat preparation if later edits invalidate
   it. When unrelated work is present, prefer existing changed-file checks or

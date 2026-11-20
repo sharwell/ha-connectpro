@@ -391,8 +391,7 @@ async def test_transport_failure_reaches_the_service_caller_and_marks_entities_u
 async def test_platforms_register_a_single_device_and_expected_controls(hass, kvm):
     entry, _ = kvm
     registry = er.async_get(hass)
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
-    assert device is not None
+    (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
     assert device.name == "Desk KVM"
     assert device.manufacturer == "ConnectPro"
     assert device.model is None
@@ -461,6 +460,5 @@ async def test_state_events_follow_feedback_and_unload(hass, kvm, serial_ports):
 
 async def test_device_uses_default_name_when_entry_title_is_empty(hass, add_entry):
     entry = await add_entry(title="")
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
-    assert device is not None
+    (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
     assert device.name == "ConnectPro KVM"

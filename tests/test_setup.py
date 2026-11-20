@@ -20,8 +20,7 @@ MODEL_REPORT = b"UDP2_14AP_U3 : Version_Number - 0009 - D1223\r\n"
 
 
 def get_device(hass, entry):
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
-    assert device is not None
+    (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
     return device
 
 
@@ -256,7 +255,7 @@ async def test_model_report_does_not_recreate_a_removed_device(
 
     await port.reader.receive(MODEL_REPORT)
 
-    assert registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)}) is None
+    assert not dr.async_entries_for_config_entry(registry, entry.entry_id)
     assert not port.closed
 
 

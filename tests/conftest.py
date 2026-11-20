@@ -1,14 +1,18 @@
 """Home Assistant fixtures using real integration setup and simulated serial I/O."""
 
+from inspect import signature
 from types import MappingProxyType
 
 import pytest
 from serial_peer import SerialReader, SerialWriter
 from serialx import SerialPortInfo
 
+# Recent Home Assistant initializes its validation compatibility layer on import.
+from homeassistant import loader
+
+# isort: split
 from custom_components.connectpro import client, config_flow
 from custom_components.connectpro.const import DOMAIN
-from homeassistant import loader
 from homeassistant.config_entries import (
     ConfigEntries,
     ConfigEntry,
@@ -17,10 +21,15 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import (
+    area_registry,
+    category_registry,
     device_registry,
     entity,
     entity_registry,
+    floor_registry,
+    frame,
     issue_registry,
+    label_registry,
     restore_state,
     translation,
 )
@@ -68,10 +77,22 @@ async def hass(tmp_path, serial_ports):
     instance = HomeAssistant(str(tmp_path))
     instance.config.skip_pip = True
     loader.async_setup(instance)
+    # The newer release separates helper setup from loading persisted state.
+    if hasattr(frame, "async_setup"):
+        frame.async_setup(instance)
     entity.async_setup(instance)
     translation.async_setup(instance)
+    if hasattr(device_registry, "async_setup"):
+        device_registry.async_setup(instance)
     await device_registry.async_load(instance)
-    await issue_registry.async_load(instance)
+    for registry in (
+        area_registry,
+        category_registry,
+        floor_registry,
+        issue_registry,
+        label_registry,
+    ):
+        await registry.async_load(instance)
     instance.config_entries = ConfigEntries(instance, {})
     await instance.config_entries.async_initialize()
     await entity_registry.async_load(instance)
@@ -87,6 +108,12 @@ async def hass(tmp_path, serial_ports):
 
 @pytest.fixture
 def add_entry(hass):
+    subentries = (
+        {"subentries_data": None}
+        if "subentries_data" in signature(ConfigEntry).parameters
+        else {}
+    )
+
     async def create(
         port="test-kvm",
         *,
@@ -106,6 +133,7 @@ def add_entry(hass):
             minor_version=1,
             discovery_keys=MappingProxyType({}),
             disabled_by=ConfigEntryDisabler.USER if disabled else None,
+            **subentries,
         )
         await hass.config_entries.async_add(entry)
         return entry

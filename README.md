@@ -230,17 +230,23 @@ python -m venv .venv
 On Linux or macOS, use `.venv/bin/python` in place of
 `.\.venv\Scripts\python` after creating the environment.
 
-Tests run simulated serial communication on Home Assistant 2024.12.5.
-The CI matrix exercises serialx 1.10.0, 1.11.0 (the version required by
-Home Assistant 2026.10.2), and the latest matching 1.x release. The
-dependency-loading tests verify that Home Assistant keeps an installed
-compatible version. The matrix covers serialx compatibility on the test
-Home Assistant version. See the [command reference](docs/commands.md) for
-physical verification.
+Local development uses the same baseline as the minimum CI job. The
+[Tests workflow](.github/workflows/tests.yml) runs the full simulated suite
+on two environments:
+
+| Job | Home Assistant | Python and serialx |
+| --- | --- | --- |
+| Minimum | The declared support floor, 2024.12.0 | Python 3.12 and ConnectPro's `serialx==1.10.0` floor |
+| Recent | A pinned stable release | The selected release's `.python-version` and package constraints |
+
+CI verifies the installed versions before pytest. The dependency-loading
+tests verify that Home Assistant keeps an installed compatible version.
+See the [command reference](docs/commands.md) for physical verification.
 
 Keep `serialx>=1.10.0,<2.0.0` in sync between the integration manifest and
-`requirements-test.txt`. An exact pin can conflict with Home Assistant's
-package constraints during an upgrade.
+`requirements-test-common.txt`. Exact pins in test environments exercise
+specific combinations. The integration's range lets Home Assistant keep
+its own compatible version during an upgrade.
 
 ### Local Codex initialization prompt
 
