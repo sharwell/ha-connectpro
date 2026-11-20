@@ -11,18 +11,17 @@ permissions:
 
 jobs:
   tests:
-    name: ${{ matrix.name }} Home Assistant
+    name: Home Assistant ${{ matrix.ha }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Minimum
+          - ha: "2024.12.0"
             python: "3.12"
-          - name: Recent
-            ha: "2026.11.2"
+          - ha: "2026.11.2"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Read Home Assistant release metadata
         id: release
         shell: bash
@@ -30,24 +29,21 @@ jobs:
           HA_RELEASE: ${{ matrix.ha }}
           MINIMUM_PYTHON: ${{ matrix.python }}
         run: |
-          release="$HA_RELEASE"
           serialx_floor=""
           python_file="$RUNNER_TEMP/ha-python-version"
-          if [[ -z "$release" ]]; then
-            release=$(sed -n 's/^homeassistant==//p' requirements-test.txt)
+          [[ "$HA_RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          source="https://raw.githubusercontent.com/home-assistant/core/$HA_RELEASE"
+          curl -fsSL --retry 3 "$source/homeassistant/package_constraints.txt" \
+            -o "$RUNNER_TEMP/ha-constraints.txt"
+          if [[ -n "$MINIMUM_PYTHON" ]]; then
             serialx_floor=$(sed -n 's/^serialx==//p' requirements-test.txt)
             [[ "$serialx_floor" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
             printf '%s\n' "$MINIMUM_PYTHON" > "$python_file"
-          fi
-          [[ "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          source="https://raw.githubusercontent.com/home-assistant/core/$release"
-          curl -fsSL --retry 3 "$source/homeassistant/package_constraints.txt" \
-            -o "$RUNNER_TEMP/ha-constraints.txt"
-          if [[ -n "$HA_RELEASE" ]]; then
+          else
             curl -fsSL --retry 3 "$source/.python-version" -o "$python_file"
           fi
-          printf 'ha=%s\nserialx-floor=%s\n' "$release" "$serialx_floor" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-python@v5
+          printf 'serialx-floor=%s\n' "$serialx_floor" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version-file: ${{ runner.temp }}/ha-python-version
           cache: pip
@@ -58,7 +54,7 @@ jobs:
       - name: Install and verify test environment
         shell: bash
         env:
-          HA_RELEASE: ${{ steps.release.outputs.ha }}
+          HA_RELEASE: ${{ matrix.ha }}
           SERIALX_FLOOR: ${{ steps.release.outputs.serialx-floor }}
         run: |
           constraints="$RUNNER_TEMP/ha-constraints.txt"
